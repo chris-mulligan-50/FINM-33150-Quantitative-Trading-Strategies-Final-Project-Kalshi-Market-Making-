@@ -1,4 +1,4 @@
-blpapi
+##blpapi install manually
 cryptography
 matplotlib
 pandas
