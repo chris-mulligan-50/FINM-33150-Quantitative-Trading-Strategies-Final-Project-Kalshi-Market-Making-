@@ -1,0 +1,8 @@
+blpapi
+cryptography
+matplotlib
+pandas
+polars
+pyarrow
+requests
+yfinance
