@@ -1,4 +1,3 @@
-*.parquet
 config.py
 kalshi_key.pem
 __pycache__/
