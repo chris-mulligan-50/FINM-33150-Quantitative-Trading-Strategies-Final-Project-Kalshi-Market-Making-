@@ -77,6 +77,7 @@ class MarketMaker:
         max_quote_size: int = 100,
         max_abs_inventory_for_size: int = 100,
         clamp_prices_to_unit_interval: bool = True,
+        out_of_market_spread_ticks: int = 0,
     ) -> None:
         """
         Parameters
@@ -101,6 +102,8 @@ class MarketMaker:
             Inventory level at which size is reduced to 0 (softly) by default sizing logic.
         clamp_prices_to_unit_interval:
             Many Kalshi binary contracts trade in [0,1]. If True, clamp bid/ask to [0,1].
+        out_of_market_spread_ticks:
+            Extra spread (in ticks) to add outside regular market hours (9:30–16:00 ET). 0 = no widening.
         """
         self.tick_size = float(tick_size)
         self.base_spread = float(base_spread)
@@ -113,11 +116,13 @@ class MarketMaker:
         self.max_quote_size = int(max_quote_size)
         self.max_abs_inventory_for_size = int(max_abs_inventory_for_size)
         self.clamp_prices_to_unit_interval = bool(clamp_prices_to_unit_interval)
+        self.out_of_market_spread_ticks = max(0, int(out_of_market_spread_ticks))
 
         # State
         self._fair_values: Dict[str, float] = {}
         self._positions: Dict[str, PositionState] = {}
         self._vix: Optional[float] = None
+        self._in_regular_hours: bool = True
 
     # -------------------------
     # State update methods
@@ -130,6 +135,10 @@ class MarketMaker:
     def update_vix(self, vix: float) -> None:
         """Update the latest VIX value (from ExecutionEngine / market data)."""
         self._vix = float(vix)
+
+    def update_market_hours(self, in_regular_hours: bool) -> None:
+        """Update whether current time is within regular trading hours (9:30–16:00 ET). Used for out-of-market spread widening."""
+        self._in_regular_hours = bool(in_regular_hours)
 
     def update_position(
         self,
@@ -176,6 +185,8 @@ class MarketMaker:
             + self.vix_spread_slope * max(vix, 0.0)
             + self.inventory_spread_slope * abs(pos.inventory)
         )
+        if not self._in_regular_hours and self.out_of_market_spread_ticks > 0:
+            spread += self.out_of_market_spread_ticks * self.tick_size
         spread = self._clamp(spread, self.min_spread, self.max_spread)
 
         # 2) Inventory skew: shift mid away from fv so we quote more aggressively to reduce inventory

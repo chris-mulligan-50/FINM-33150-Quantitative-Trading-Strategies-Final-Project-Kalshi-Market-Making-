@@ -39,6 +39,7 @@ Notes
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Dict, List, Optional, Sequence
 
 import polars as pl
@@ -306,6 +307,8 @@ class Simulator:
                         spx=float(spx),
                         vix=float(vix),
                     ))
+            if not math.isfinite(fv):
+                fv = 0.0
             kalshi_value += q * fv
 
         return cash + float(spy_pos) * float(spy) + kalshi_value

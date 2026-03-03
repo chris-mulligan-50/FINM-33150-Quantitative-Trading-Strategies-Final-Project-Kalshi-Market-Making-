@@ -16,7 +16,6 @@ python src/main.py \
 ```
 
 ### TO-DO:
-- Fix fill qty possible bug. (ie. amount traded /= position we take on).
 - Implement proper short-selling margin rules.
 - Check cash / pnl / performance metrics.
 - Adverse Selection Risk Management

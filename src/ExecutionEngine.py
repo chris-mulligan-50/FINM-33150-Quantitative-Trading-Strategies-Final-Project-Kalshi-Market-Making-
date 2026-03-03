@@ -54,11 +54,36 @@ This engine imports Pricer, DeltaHedger, and PositionManager from their own modu
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Any
+from datetime import datetime, timezone
+import math
+from typing import Any, Dict, List, Optional, Sequence
+from zoneinfo import ZoneInfo
 
 from DeltaHedger import DeltaHedger, HedgeOrder
 from PositionManager import PositionManager
 from Pricer import Pricer
+
+
+# ============================================================
+# Market hours (ET) for out-of-market spread widening
+# ============================================================
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _is_regular_trading_hours_et(ts: Any) -> bool:
+    """
+    True if ts falls within US regular trading hours 9:30–16:00 ET (inclusive 9:30, exclusive 16:00).
+    ts can be datetime (naive treated as UTC) or numeric Unix timestamp.
+    """
+    if isinstance(ts, (int, float)):
+        dt = datetime.fromtimestamp(float(ts), tz=timezone.utc).astimezone(_ET)
+    elif isinstance(ts, datetime):
+        dt = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(_ET)
+    else:
+        return True  # unknown type: assume regular hours
+    return (dt.hour, dt.minute) >= (9, 30) and dt.hour < 16
 
 
 # ============================================================
@@ -126,7 +151,8 @@ class ExecutionEngine:
         ----------
         market_maker:
             Instance of your MarketMaker class (MarketMaker.py). Must expose:
-              update_vix(vix), update_fair_value(contract_id, fv), update_position(contract_id,...), make_quote(contract_id)
+              update_vix(vix), update_market_hours(in_regular_hours), update_fair_value(contract_id, fv),
+              update_position(contract_id,...), make_quote(contract_id)
         pricer:
             Pricing module. Must expose: price(contract_id, spx, vix) -> fair value
         delta_hedger:
@@ -192,8 +218,9 @@ class ExecutionEngine:
         # 1b) settle expired Kalshi contracts (expiry settles at next-day start)
         self.pm.settle_expired_contracts(ts=ts, settlement_spx=float(spx))
 
-        # 2) update MarketMaker's VIX
+        # 2) update MarketMaker's VIX and market-hours state (for out-of-market spread widening)
         self.mm.update_vix(vix)
+        self.mm.update_market_hours(_is_regular_trading_hours_et(ts))
 
         # 3) determine contracts to quote
         if self._quote_contracts is not None:
@@ -213,6 +240,10 @@ class ExecutionEngine:
                 # Backward compatibility for custom Pricer implementations
                 # that have not yet added the optional ts argument.
                 fv = float(self.pricer.price(contract_id=cid, spx=float(spx), vix=float(vix)))
+            # Pricer may return NaN for invalid/expired contracts at this timestamp.
+            # Skip quoting those contracts instead of crashing inside MarketMaker.
+            if not math.isfinite(fv):
+                continue
             self.mm.update_fair_value(cid, fv)
 
             inv = self.pm.get_kalshi_position(cid)

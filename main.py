@@ -22,6 +22,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from DataIngestor import DataIngestor, KalshiCleanSpec, KalshiMarketSpec, MacroSpec
+from DeltaHedger import NoHedgeDeltaHedger
 from ExecutionEngine import ExecutionEngine
 from MarketMaker import MarketMaker
 from Simulator import Simulator
@@ -126,6 +127,13 @@ def _build_parser() -> argparse.ArgumentParser:
     # Optional runtime params
     parser.add_argument("--tick-size", type=float, default=0.01, help="Tick size for Simulator/MarketMaker.")
     parser.add_argument("--base-spread", type=float, default=0.02, help="Base spread for MarketMaker.")
+    parser.add_argument(
+        "--out-of-market-spread-ticks",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Widen bid/ask spread by N ticks outside regular hours (9:30–16:00 ET). Default: 0.",
+    )
     parser.add_argument("--execution-delay", type=int, default=1, help="Execution delay in seconds.")
     parser.add_argument("--default-quote-size", type=int, default=None, help="Optional quote size override.")
     parser.add_argument("--timezone", default=None, help="Optional timezone for DataIngestor timestamp handling.")
@@ -133,6 +141,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         default="simulation_output.parquet",
         help="Output file path (.parquet or .csv). Default: simulation_output.parquet",
+    )
+    parser.add_argument(
+        "--no-hedge",
+        action="store_true",
+        help="Disable SPY delta hedging; run strategy with no hedges (for comparison).",
     )
 
     return parser
@@ -211,9 +224,12 @@ def main() -> None:
     market_maker = MarketMaker(
         tick_size=float(args.tick_size),
         base_spread=float(args.base_spread),
+        out_of_market_spread_ticks=int(args.out_of_market_spread_ticks),
     )
+    delta_hedger = NoHedgeDeltaHedger() if args.no_hedge else None
     engine = ExecutionEngine(
         market_maker=market_maker,
+        delta_hedger=delta_hedger,
         execution_delay_seconds=int(args.execution_delay),
         default_quote_size=args.default_quote_size,
     )

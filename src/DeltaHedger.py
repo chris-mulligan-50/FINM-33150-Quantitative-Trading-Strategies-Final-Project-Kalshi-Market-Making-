@@ -217,3 +217,23 @@ class DeltaHedger:
     def _is_no_above(contract_id: str) -> bool:
         cid = contract_id.upper()
         return any(token in cid for token in ("NO ABOVE", "NO_ABOVE", "NO-ABOVE", ":NO", "-NO"))
+
+
+class NoHedgeDeltaHedger:
+    """
+    No-op hedger that never submits SPY hedge orders.
+    Use this to run the strategy without any delta hedging (e.g. to compare PnL).
+    Same interface as DeltaHedger: hedge(...) -> Optional[HedgeOrder], always returns None.
+    """
+
+    def hedge(
+        self,
+        *,
+        ts: Any,
+        spy_price: float,
+        spx_price: float,
+        vix: Optional[float],
+        kalshi_positions: Dict[str, int],
+        current_spy_position: int,
+    ) -> Optional[HedgeOrder]:
+        return None
