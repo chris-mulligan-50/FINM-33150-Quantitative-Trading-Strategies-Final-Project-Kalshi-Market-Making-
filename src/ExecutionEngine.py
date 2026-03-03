@@ -44,7 +44,8 @@ To Simulator:
 
 Key behavioral assumptions
 -------------------------
-- Execution delay of 1 second for ALL trades (Kalshi fills and SPY hedge orders).
+- Execution delay of 1 second for SPY hedge trades.
+- Kalshi fills are applied immediately when received from the Simulator.
 - Queue assumption / fill detection lives in the Simulator; the engine receives fills as "intents".
 
 This engine imports Pricer, DeltaHedger, and PositionManager from their own modules.
@@ -68,7 +69,7 @@ from Pricer import Pricer
 class FillIntent:
     """
     What the Simulator sends to the ExecutionEngine when it determines we'd get filled.
-    The engine applies these trades with a 1-second delay.
+    Kalshi fills are applied immediately.
     """
     ts: Any
     contract_id: str
@@ -81,6 +82,7 @@ class FillIntent:
 class PendingTrade:
     """
     A trade that will be applied in the future (execution delay).
+    Currently used for SPY hedge trades.
     """
     execute_ts: Any
     kind: str                    # "kalshi" or "spy"
@@ -128,7 +130,8 @@ class ExecutionEngine:
         pricer:
             Pricing module. Must expose: price(contract_id, spx, vix) -> fair value
         delta_hedger:
-            Hedging module. Must expose: hedge(ts, spy_price, total_kalshi_inventory, current_spy_position) -> HedgeOrder|None
+            Hedging module. Must expose:
+              hedge(ts, spy_price, spx_price, vix, kalshi_positions, current_spy_position) -> HedgeOrder|None
         position_manager:
             Position tracking module.
         execution_delay_seconds:
@@ -186,6 +189,9 @@ class ExecutionEngine:
         # 1) apply delayed trades due now
         self._apply_pending(ts=ts, spy_price=spy)
 
+        # 1b) settle expired Kalshi contracts (expiry settles at next-day start)
+        self.pm.settle_expired_contracts(ts=ts, settlement_spx=float(spx))
+
         # 2) update MarketMaker's VIX
         self.mm.update_vix(vix)
 
@@ -201,7 +207,12 @@ class ExecutionEngine:
         quotes: Dict[str, Dict[str, Any]] = {}
 
         for cid in cids:
-            fv = float(self.pricer.price(contract_id=cid, spx=float(spx), vix=float(vix)))
+            try:
+                fv = float(self.pricer.price(contract_id=cid, spx=float(spx), vix=float(vix), ts=ts))
+            except TypeError:
+                # Backward compatibility for custom Pricer implementations
+                # that have not yet added the optional ts argument.
+                fv = float(self.pricer.price(contract_id=cid, spx=float(spx), vix=float(vix)))
             self.mm.update_fair_value(cid, fv)
 
             inv = self.pm.get_kalshi_position(cid)
@@ -229,12 +240,13 @@ class ExecutionEngine:
         self._quotes_by_contract = quotes
 
         # 5) hedge decision (SPY)
-        total_inv = self.pm.get_total_kalshi_inventory()
         spy_pos = self.pm.get_spy_position()
         hedge_order = self.dh.hedge(
             ts=ts,
             spy_price=float(spy),
-            total_kalshi_inventory=int(total_inv),
+            spx_price=float(spx),
+            vix=float(vix),
+            kalshi_positions=self.pm.get_kalshi_positions(),
             current_spy_position=int(spy_pos),
         )
         self._last_hedge_order = hedge_order
@@ -255,24 +267,17 @@ class ExecutionEngine:
 
     def on_fills(self, fills: Sequence[FillIntent]) -> None:
         """
-        Schedule Kalshi trades from fill intents to be executed with +delay seconds.
+        Apply Kalshi trades immediately from fill intents.
 
         The Simulator should compute fills using your queue assumption.
         """
-        if self._last_ts is None:
-            raise RuntimeError("on_fills called before on_tick.")
-
-        execute_ts = self._ts_plus_seconds(self._last_ts, self.delay)
-
         for f in fills:
-            self._pending.append(PendingTrade(
-                execute_ts=execute_ts,
-                kind="kalshi",
+            self.pm.apply_kalshi_trade(
                 contract_id=f.contract_id,
                 side=f.side,
                 qty=int(f.size),
                 price=float(f.price),
-            ))
+            )
 
     # --------------------------------------------------------
     # Observability helpers (useful for logging)
@@ -327,14 +332,14 @@ class ExecutionEngine:
     # --------------------------------------------------------
 
     def _apply_pending(self, *, ts: Any, spy_price: float) -> None:
-        """Apply all trades whose execute_ts == ts."""
+        """Apply all trades whose execute_ts is due at current ts."""
         if not self._pending:
             return
 
         remaining: List[PendingTrade] = []
 
         for pt in self._pending:
-            if pt.execute_ts == ts:
+            if self._is_trade_due(execute_ts=pt.execute_ts, now_ts=ts):
                 if pt.kind == "kalshi":
                     assert pt.contract_id is not None
                     self.pm.apply_kalshi_trade(contract_id=pt.contract_id, side=pt.side, qty=pt.qty, price=pt.price)
@@ -345,6 +350,20 @@ class ExecutionEngine:
                 remaining.append(pt)
 
         self._pending = remaining
+
+    @staticmethod
+    def _is_trade_due(*, execute_ts: Any, now_ts: Any) -> bool:
+        """
+        Return True if the trade should execute at now_ts.
+
+        For orderable timestamps we use execute_ts <= now_ts so delayed trades
+        still execute at the first available tick even when exact timestamps are sparse.
+        If timestamps are not orderable/comparable, fall back to exact equality.
+        """
+        try:
+            return execute_ts <= now_ts
+        except Exception:
+            return execute_ts == now_ts
 
     def _schedule_spy_trade(self, *, decision_ts: Any, side: str, qty: int, ref_price: float) -> None:
         execute_ts = self._ts_plus_seconds(decision_ts, self.delay)

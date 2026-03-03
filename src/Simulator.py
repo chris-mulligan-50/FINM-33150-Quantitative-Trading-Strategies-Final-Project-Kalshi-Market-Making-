@@ -6,7 +6,7 @@ Market simulator for a Kalshi market-making bot.
 Responsibilities
 ----------------
 - Consume the long-form `all_df` from DataIngestor:
-    ts | contract_id | take_bid | take_ask | best_bid | best_ask | spx | vix | spy | ...
+    ts | contract_id | take_bid | take_ask | spx | vix | spy | ...
 
 - On each second (ts):
     1) call ExecutionEngine.on_tick(...) to get bot resting quotes & hedge order decision
@@ -17,7 +17,7 @@ Responsibilities
        (engine applies trades with 1-second delay internally)
 
 - Log, per (ts, contract_id):
-    - market snapshot (take_bid/take_ask/best_bid/best_ask)
+    - market snapshot (take_bid/take_ask)
     - macro snapshot (spx/vix/spy)
     - bot quotes
     - fill flags (whether we'd be filled at this ts)
@@ -56,6 +56,19 @@ class Simulator:
     def __init__(self, *, tick_size: float = 0.01) -> None:
         self.tick_size = float(tick_size)
 
+    @staticmethod
+    def _normalize_ts_key(ts_key: Any) -> Any:
+        """
+        Polars partition_by(as_dict=True) may return 1-column group keys wrapped
+        as tuples/lists. Normalize to the scalar timestamp so downstream modules
+        can do timestamp arithmetic and equality checks reliably.
+        """
+        if isinstance(ts_key, tuple) and len(ts_key) == 1:
+            return ts_key[0]
+        if isinstance(ts_key, list) and len(ts_key) == 1:
+            return ts_key[0]
+        return ts_key
+
     def run(
         self,
         *,
@@ -70,8 +83,6 @@ class Simulator:
         all_df:
             Output from DataIngestor.load()[0]. Must include:
               ts, contract_id, take_bid, take_ask, spx, vix, spy
-            Optionally includes:
-              best_bid, best_ask
         execution_engine:
             Instance of ExecutionEngine. Must expose:
               on_tick(ts, spx, vix, spy, contract_ids) -> dict
@@ -105,9 +116,12 @@ class Simulator:
         ts_list = sorted(per_ts.keys())
 
         records: List[dict] = []
+        base_equity: Optional[float] = None
+        prev_equity: Optional[float] = None
 
-        for ts in ts_list:
-            df_ts = per_ts[ts]
+        for ts_key in ts_list:
+            ts = self._normalize_ts_key(ts_key)
+            df_ts = per_ts[ts_key]
 
             # Macro is constant across all rows at ts; grab first row
             spx, vix, spy = [float(x) for x in df_ts.select(["spx", "vix", "spy"]).row(0)]
@@ -122,6 +136,23 @@ class Simulator:
             )
 
             quotes_by_contract = engine_out.get("quotes_by_contract", {})
+            equity = self._portfolio_equity(
+                execution_engine=execution_engine,
+                quotes_by_contract=quotes_by_contract,
+                ts=ts,
+                spx=spx,
+                vix=vix,
+                spy=spy,
+            )
+            if base_equity is None:
+                base_equity = float(equity)
+            if prev_equity is None:
+                period_return = 0.0
+            else:
+                period_return = (float(equity) / float(prev_equity) - 1.0) if prev_equity != 0.0 else 0.0
+            pnl = float(equity) - float(base_equity)
+            cumulative_return = (float(equity) / float(base_equity) - 1.0) if base_equity != 0.0 else 0.0
+            prev_equity = float(equity)
 
             # 2) Determine fills under last-in-queue assumption
             fill_intents: List[FillIntent] = []
@@ -184,8 +215,6 @@ class Simulator:
                     "spy": spy,
                     "take_bid": row.get("take_bid"),
                     "take_ask": row.get("take_ask"),
-                    "best_bid": row.get("best_bid") if "best_bid" in df_ts.columns else None,
-                    "best_ask": row.get("best_ask") if "best_ask" in df_ts.columns else None,
                     "fair_value": fair_value,
                     "my_bid": my_bid,
                     "my_ask": my_ask,
@@ -193,6 +222,10 @@ class Simulator:
                     "my_ask_size": my_ask_size,
                     "bid_fill": bid_fill,
                     "ask_fill": ask_fill,
+                    "portfolio_value": float(equity),
+                    "pnl": float(pnl),
+                    "period_return": float(period_return),
+                    "cumulative_return": float(cumulative_return),
                 }
 
                 if log_engine_state:
@@ -215,6 +248,52 @@ class Simulator:
         execution_engine.flush()
 
         return pl.DataFrame(records)
+
+    @staticmethod
+    def _portfolio_equity(
+        *,
+        execution_engine,
+        quotes_by_contract: Dict[str, Dict[str, Any]],
+        ts: Any,
+        spx: float,
+        vix: float,
+        spy: float,
+    ) -> float:
+        """
+        Mark-to-market equity:
+          cash + SPY position value + sum(Kalshi qty * contract fair value)
+        """
+        pm = execution_engine.pm
+        cash = float(pm.get_cash())
+        spy_pos = int(pm.get_spy_position())
+        kalshi_positions = pm.get_kalshi_positions()
+
+        kalshi_value = 0.0
+        for cid, qty in kalshi_positions.items():
+            q = int(qty)
+            if q == 0:
+                continue
+
+            qv = quotes_by_contract.get(cid)
+            if qv is not None and qv.get("fair_value") is not None:
+                fv = float(qv["fair_value"])
+            else:
+                try:
+                    fv = float(execution_engine.pricer.price(
+                        contract_id=cid,
+                        spx=float(spx),
+                        vix=float(vix),
+                        ts=ts,
+                    ))
+                except TypeError:
+                    fv = float(execution_engine.pricer.price(
+                        contract_id=cid,
+                        spx=float(spx),
+                        vix=float(vix),
+                    ))
+            kalshi_value += q * fv
+
+        return cash + float(spy_pos) * float(spy) + kalshi_value
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ Outputs:
 Design Philosophy
 -----------------
 • Kalshi data is stored LONG:
-    ts | contract_id | take_bid | take_ask | best_bid | best_ask
+    ts | contract_id | take_bid | take_ask
 
 • Macro data is stored WIDE:
     ts | spx | vix | spy
@@ -42,8 +42,6 @@ class KalshiMarketSpec:
     ts_col: str = "ts"
     take_bid_col: str = "take_bid"
     take_ask_col: str = "take_ask"
-    best_bid_col: str = "best_bid"
-    best_ask_col: str = "best_ask"
 
 
 @dataclass(frozen=True)
@@ -180,12 +178,6 @@ class DataIngestor:
 
             cols = [m.ts_col, m.take_bid_col, m.take_ask_col]
 
-            # optional cols
-            if m.best_bid_col in df.columns:
-                cols.append(m.best_bid_col)
-            if m.best_ask_col in df.columns:
-                cols.append(m.best_ask_col)
-
             df = df.select(cols)
 
             df = df.with_columns([
@@ -194,27 +186,11 @@ class DataIngestor:
                 pl.col(m.take_ask_col).cast(pl.Float64).alias("take_ask"),
             ])
 
-            if m.best_bid_col in df.columns:
-                df = df.with_columns(
-                    pl.col(m.best_bid_col).cast(pl.Float64).alias("best_bid")
-                )
-            else:
-                df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("best_bid"))
-
-            if m.best_ask_col in df.columns:
-                df = df.with_columns(
-                    pl.col(m.best_ask_col).cast(pl.Float64).alias("best_ask")
-                )
-            else:
-                df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("best_ask"))
-
             df = df.select([
                 pl.col(m.ts_col).alias("ts"),
                 "contract_id",
                 "take_bid",
                 "take_ask",
-                "best_bid",
-                "best_ask",
             ])
 
             dfs.append(df)
@@ -268,11 +244,7 @@ class DataIngestor:
                 .filter(
                     pl.col("take_bid").is_not_null() | pl.col("take_ask").is_not_null()
                 )
-                .with_columns([
-                    pl.lit(None).cast(pl.Float64).alias("best_bid"),
-                    pl.lit(None).cast(pl.Float64).alias("best_ask"),
-                ])
-                .select(["ts", "contract_id", "take_bid", "take_ask", "best_bid", "best_ask"])
+                .select(["ts", "contract_id", "take_bid", "take_ask"])
             )
 
             dfs.append(df)

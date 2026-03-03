@@ -19,6 +19,7 @@ Notes
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Dict, Optional, Tuple
 
 
@@ -72,7 +73,7 @@ class MarketMaker:
         inventory_skew_slope: float = 0.0005,
         max_spread: float = 0.50,
         min_spread: float = 0.01,
-        default_quote_size: int = 1,
+        default_quote_size: int = 10,
         max_quote_size: int = 25,
         max_abs_inventory_for_size: int = 50,
         clamp_prices_to_unit_interval: bool = True,
@@ -212,6 +213,8 @@ class MarketMaker:
 
         # Optional asymmetric sizing (tilt sizes to reduce inventory faster)
         bid_size, ask_size = self._inventory_tilt_sizes(sz, pos.inventory)
+        maker_fee_bid = self.calculate_maker_fee(price=bid, contracts=bid_size)
+        maker_fee_ask = self.calculate_maker_fee(price=ask, contracts=ask_size)
 
         return Quote(
             contract_id=contract_id,
@@ -227,6 +230,8 @@ class MarketMaker:
                 "mid": float(mid),
                 "mid_skew": float(mid_skew),
                 "model_spread": float(spread),
+                "maker_fee_bid": float(maker_fee_bid),
+                "maker_fee_ask": float(maker_fee_ask),
             },
         )
 
@@ -256,6 +261,18 @@ class MarketMaker:
         if q * tick < x:
             q += 1
         return q * tick
+
+    @staticmethod
+    def calculate_maker_fee(*, price: float, contracts: int) -> float:
+        """
+        Maker fee formula:
+            fee = round up(0.0175 * C * P * (1 - P))
+        where round up means to the next cent.
+        """
+        c = max(0, int(contracts))
+        p = float(price)
+        raw_fee = 0.0175 * c * p * (1.0 - p)
+        return math.ceil(raw_fee * 100.0) / 100.0
 
     @staticmethod
     def _inventory_tilt_sizes(base_size: int, inventory: int) -> Tuple[int, int]:
