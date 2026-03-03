@@ -129,8 +129,10 @@ class Simulator:
             for row in df_ts.iter_rows(named=True):
                 cid = row["contract_id"]
 
-                take_bid = float(row["take_bid"])
-                take_ask = float(row["take_ask"])
+                take_bid_raw = row["take_bid"]
+                take_ask_raw = row["take_ask"]
+                take_bid = float(take_bid_raw) if take_bid_raw is not None else None
+                take_ask = float(take_ask_raw) if take_ask_raw is not None else None
 
                 q = quotes_by_contract.get(cid)
 
@@ -151,10 +153,18 @@ class Simulator:
 
                     # Queue assumption: we are LAST at our price level
                     # Bid gets hit only if the taker sells through our level by one tick
-                    bid_fill = (my_bid_size > 0) and (take_bid <= (my_bid - self.tick_size))
+                    bid_fill = (
+                        (my_bid_size > 0)
+                        and (take_bid is not None)
+                        and (take_bid <= (my_bid - self.tick_size))
+                    )
 
                     # Ask gets lifted only if the taker buys through our level by one tick
-                    ask_fill = (my_ask_size > 0) and (take_ask >= (my_ask + self.tick_size))
+                    ask_fill = (
+                        (my_ask_size > 0)
+                        and (take_ask is not None)
+                        and (take_ask >= (my_ask + self.tick_size))
+                    )
 
                     if bid_fill:
                         fill_intents.append(FillIntent(

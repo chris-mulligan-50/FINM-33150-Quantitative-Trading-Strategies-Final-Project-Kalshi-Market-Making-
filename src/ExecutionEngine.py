@@ -47,129 +47,17 @@ Key behavioral assumptions
 - Execution delay of 1 second for ALL trades (Kalshi fills and SPY hedge orders).
 - Queue assumption / fill detection lives in the Simulator; the engine receives fills as "intents".
 
-This file includes minimal stub implementations of Pricer, DeltaHedger, and PositionManager
-so everything runs end-to-end. Swap them for your real modules when ready.
+This engine imports Pricer, DeltaHedger, and PositionManager from their own modules.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Any
 
-import math
-
-
-# ============================================================
-# Minimal interfaces / stubs (replace with your real modules)
-# ============================================================
-
-class Pricer:
-    """
-    Stub pricer: (SPX, VIX, contract_id) -> fair value in [0,1].
-
-    Replace this with your contract-specific model.
-    """
-    def price(self, *, contract_id: str, spx: float, vix: float) -> float:
-        z = 0.0001 * (spx - 5000.0) + 0.02 * (vix - 20.0)
-        fv = 1.0 / (1.0 + math.exp(-z))
-        return float(min(0.999, max(0.001, fv)))
-
-
-@dataclass(frozen=True)
-class HedgeOrder:
-    ts: Any
-    symbol: str          # "SPY"
-    side: str            # "buy" | "sell"
-    qty: int
-    ref_price: float     # reference price at decision time
-
-
-class DeltaHedger:
-    """
-    Stub delta hedger.
-    Replace with a true delta-based hedge that maps Kalshi exposure to SPY.
-    """
-    def __init__(self, *, k: float = 1.0, max_qty_per_tick: int = 50) -> None:
-        self.k = float(k)
-        self.max_qty_per_tick = int(max_qty_per_tick)
-
-    def hedge(
-        self,
-        *,
-        ts: Any,
-        spy_price: float,
-        total_kalshi_inventory: int,
-        current_spy_position: int,
-    ) -> Optional[HedgeOrder]:
-        # Toy target: spy_target = -k * kalshi_inventory
-        target = int(round(-self.k * total_kalshi_inventory))
-        diff = target - current_spy_position
-        if diff == 0:
-            return None
-
-        qty = min(abs(diff), self.max_qty_per_tick)
-        side = "buy" if diff > 0 else "sell"
-        return HedgeOrder(ts=ts, symbol="SPY", side=side, qty=qty, ref_price=float(spy_price))
-
-
-@dataclass
-class PositionSnapshot:
-    kalshi: Dict[str, int] = field(default_factory=dict)  # contract_id -> inventory
-    spy: int = 0
-    cash: float = 0.0
-
-
-class PositionManager:
-    """
-    Tracks positions for:
-      - Kalshi contracts (integer inventory per contract_id)
-      - SPY (integer shares)
-      - Cash (optional)
-    """
-    def __init__(self) -> None:
-        self._kalshi: Dict[str, int] = {}
-        self._spy: int = 0
-        self._cash: float = 0.0
-
-    # ---- Kalshi ----
-    def apply_kalshi_trade(self, *, contract_id: str, side: str, qty: int, price: float) -> None:
-        inv = self._kalshi.get(contract_id, 0)
-        if side == "buy":
-            inv += qty
-            self._cash -= qty * price
-        elif side == "sell":
-            inv -= qty
-            self._cash += qty * price
-        else:
-            raise ValueError(f"Unknown side={side!r}")
-        self._kalshi[contract_id] = inv
-
-    def get_kalshi_position(self, contract_id: str) -> int:
-        return int(self._kalshi.get(contract_id, 0))
-
-    def get_total_kalshi_inventory(self) -> int:
-        return int(sum(self._kalshi.values()))
-
-    # ---- SPY ----
-    def apply_spy_trade(self, *, side: str, qty: int, price: float) -> None:
-        if side == "buy":
-            self._spy += qty
-            self._cash -= qty * price
-        elif side == "sell":
-            self._spy -= qty
-            self._cash += qty * price
-        else:
-            raise ValueError(f"Unknown side={side!r}")
-
-    def get_spy_position(self) -> int:
-        return int(self._spy)
-
-    # ---- Cash ----
-    def get_cash(self) -> float:
-        return float(self._cash)
-
-    def snapshot(self) -> PositionSnapshot:
-        return PositionSnapshot(kalshi=dict(self._kalshi), spy=int(self._spy), cash=float(self._cash))
+from DeltaHedger import DeltaHedger, HedgeOrder
+from PositionManager import PositionManager
+from Pricer import Pricer
 
 
 # ============================================================
@@ -488,4 +376,3 @@ class ExecutionEngine:
         except Exception:
             # If we cannot shift time, fall back to no-delay behavior
             return ts
-s

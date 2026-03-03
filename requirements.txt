@@ -5,4 +5,4 @@ pandas
 polars
 pyarrow
 requests
-yfinance
+##yfinance installation manually
