@@ -6,7 +6,8 @@ Fair-value pricer for Kalshi binary-style SPX contracts.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import math
 import re
 from typing import Any, Optional
@@ -161,7 +162,7 @@ class Pricer:
 
         now_dt = self._to_datetime(ts)
         if now_dt is None:
-            now_dt = datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            now_dt = datetime.now(timezone.utc)
 
         seconds = (expiry - now_dt).total_seconds()
         if seconds <= 0.0:
@@ -246,20 +247,23 @@ class Pricer:
 
         year = 2000 + yy
         try:
-            dt = datetime(year, month, dd, hh, mm)
-            # convert from ET to UTC by adding 5 hours (note: this is not a full timezone-aware conversion, but should be sufficient for our purposes since Kalshi contracts expire at 16:00 ET which is 21:00 UTC) 
-            dt += timedelta(hours=5)
-            return dt
+            # contract time is 16:00 ET (America/New_York), convert to UTC properly (handles DST)
+            et = ZoneInfo("America/New_York")
+            dt_et = datetime(year, month, dd, hh, mm, tzinfo=et)
+            return dt_et.astimezone(timezone.utc)
         except ValueError:
             return None
 
     @staticmethod
     def _to_datetime(ts: Any) -> Optional[datetime]:
-        """
-        Convert a timestamp to a datetime object. If the input is already a datetime, return it as is (after removing tzinfo). If the input is a UNIX timestamp (int or float), convert it to a datetime. If the input is invalid, return None.
-        """
+        # Return an aware UTC datetime
+        if ts is None:
+            return None
         if isinstance(ts, datetime):
-            return ts.replace(tzinfo=None)
+            # If naive, assume UTC (per your doc); if aware, convert to UTC
+            return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+        if isinstance(ts, (int, float)):
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc)
         return None
 
     @staticmethod
