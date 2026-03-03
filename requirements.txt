@@ -5,4 +5,5 @@ pandas
 polars
 pyarrow
 requests
+numpy
 ##yfinance installation manually

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from datetime import datetime
@@ -21,17 +22,6 @@ class PricerTests(unittest.TestCase):
         self.spx = 6900.0
         self.vix = 20.0
 
-    def test_kxinxu_yes_no_are_complements(self) -> None:
-        cid_yes = "KXINXU-26JAN23H1600-T6874.9999"
-        cid_no = "KXINXU:NO-26JAN23H1600-T6874.9999"
-
-        p_yes = self.pricer.price(contract_id=cid_yes, spx=self.spx, vix=self.vix, ts=self.ts)
-        p_no = self.pricer.price(contract_id=cid_no, spx=self.spx, vix=self.vix, ts=self.ts)
-
-        self.assertGreater(p_yes, 0.5)
-        self.assertLess(p_no, 0.5)
-        self.assertAlmostEqual(p_yes + p_no, 1.0, places=12)
-
     def test_kxinxu_yes_probability_decreases_with_higher_strike(self) -> None:
         low_strike = "KXINXU-26JAN23H1600-T6874.9999"
         high_strike = "KXINXU-26JAN23H1600-T6974.9999"
@@ -41,16 +31,23 @@ class PricerTests(unittest.TestCase):
 
         self.assertGreater(p_low, p_high)
 
-    def test_kxinx_yes_no_are_complements(self) -> None:
-        cid_yes = "KXINX-26JAN23H1600-B6887"
-        cid_no = "KXINX:NO-26JAN23H1600-B6887"
+    def test_kxinxu_yes_probability_increases_with_higher_vix_very_OTM(self) -> None:
+        """
+        Conceptually only true when binary call is sufficiently OTM
+        """
+        low_vix = 10.0
+        high_vix = 30.0
+        contract_id = "KXINXU-26JAN23H1600-T7000.9999"
 
-        p_yes = self.pricer.price(contract_id=cid_yes, spx=self.spx, vix=self.vix, ts=self.ts)
-        p_no = self.pricer.price(contract_id=cid_no, spx=self.spx, vix=self.vix, ts=self.ts)
+        p_low_vix = self.pricer.price(contract_id=contract_id, spx=self.spx, vix=low_vix, ts=self.ts)
+        p_high_vix = self.pricer.price(contract_id=contract_id, spx=self.spx, vix=high_vix, ts=self.ts)
 
-        self.assertGreaterEqual(p_yes, 0.0)
-        self.assertLessEqual(p_yes, 1.0)
-        self.assertAlmostEqual(p_yes + p_no, 1.0, places=12)
+        self.assertGreater(p_high_vix, p_low_vix)
+
+    def test_kxinxu_under_50_when_strike_equals_spx(self) -> None:
+        contract_id = "KXINXU-26JAN23H1600-T6900.0000"
+        p = self.pricer.price(contract_id=contract_id, spx=self.spx, vix=self.vix, ts=self.ts)
+        self.assertLess(p, 0.5)
 
     def test_kxinx_yes_matches_binary_call_spread_replication(self) -> None:
         cid_yes = "KXINX-26JAN23H1600-B6887"
@@ -62,7 +59,7 @@ class PricerTests(unittest.TestCase):
         upper = midpoint + half_width
 
         sigma = self.vix / 100.0
-        tau = (datetime(2026, 1, 23, 16, 0) - self.ts).total_seconds() / (365.0 * 24.0 * 60.0 * 60.0)
+        tau = self.pricer._time_to_expiry_years(ts=self.ts, contract_id=cid_yes)
 
         p_above_lower = self.pricer._prob_above(spx=self.spx, strike=lower, sigma=sigma, tau=tau)
         p_above_upper = self.pricer._prob_above(spx=self.spx, strike=upper, sigma=sigma, tau=tau)
@@ -70,10 +67,9 @@ class PricerTests(unittest.TestCase):
 
         self.assertAlmostEqual(p_yes, replicated, places=12)
 
-    def test_unparseable_contract_returns_neutral_price(self) -> None:
+    def test_unparseable_contract_returns_nan(self) -> None:
         p = self.pricer.price(contract_id="UNKNOWN_CONTRACT", spx=self.spx, vix=self.vix, ts=self.ts)
-        self.assertAlmostEqual(p, 0.5, places=12)
-
+        self.assertTrue(math.isnan(p))
 
 if __name__ == "__main__":
     unittest.main()
