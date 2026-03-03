@@ -5,7 +5,6 @@ SPY data: https://drive.google.com/drive/folders/1C1a70w9k-z78yTSwz2QPKVb-ZJMKi8
 
 ### Sim Run Instructions
 
-In
 ```bash
 python src/main.py \
   --spx "Data/spx_clean.parquet" \
