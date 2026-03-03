@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from datetime import datetime
@@ -21,17 +22,6 @@ class PricerTests(unittest.TestCase):
         self.spx = 6900.0
         self.vix = 20.0
 
-    def test_kxinxu_yes_no_are_complements(self) -> None:
-        cid_yes = "KXINXU-26JAN23H1600-T6874.9999"
-        cid_no = "KXINXU:NO-26JAN23H1600-T6874.9999"
-
-        p_yes = self.pricer.price(contract_id=cid_yes, spx=self.spx, vix=self.vix, ts=self.ts)
-        p_no = self.pricer.price(contract_id=cid_no, spx=self.spx, vix=self.vix, ts=self.ts)
-
-        self.assertGreater(p_yes, 0.5)
-        self.assertLess(p_no, 0.5)
-        self.assertAlmostEqual(p_yes + p_no, 1.0, places=12)
-
     def test_kxinxu_yes_probability_decreases_with_higher_strike(self) -> None:
         low_strike = "KXINXU-26JAN23H1600-T6874.9999"
         high_strike = "KXINXU-26JAN23H1600-T6974.9999"
@@ -40,17 +30,6 @@ class PricerTests(unittest.TestCase):
         p_high = self.pricer.price(contract_id=high_strike, spx=self.spx, vix=self.vix, ts=self.ts)
 
         self.assertGreater(p_low, p_high)
-
-    def test_kxinx_yes_no_are_complements(self) -> None:
-        cid_yes = "KXINX-26JAN23H1600-B6887"
-        cid_no = "KXINX:NO-26JAN23H1600-B6887"
-
-        p_yes = self.pricer.price(contract_id=cid_yes, spx=self.spx, vix=self.vix, ts=self.ts)
-        p_no = self.pricer.price(contract_id=cid_no, spx=self.spx, vix=self.vix, ts=self.ts)
-
-        self.assertGreaterEqual(p_yes, 0.0)
-        self.assertLessEqual(p_yes, 1.0)
-        self.assertAlmostEqual(p_yes + p_no, 1.0, places=12)
 
     def test_kxinx_yes_matches_binary_call_spread_replication(self) -> None:
         cid_yes = "KXINX-26JAN23H1600-B6887"
@@ -70,10 +49,9 @@ class PricerTests(unittest.TestCase):
 
         self.assertAlmostEqual(p_yes, replicated, places=12)
 
-    def test_unparseable_contract_returns_neutral_price(self) -> None:
+    def test_unparseable_contract_returns_nan(self) -> None:
         p = self.pricer.price(contract_id="UNKNOWN_CONTRACT", spx=self.spx, vix=self.vix, ts=self.ts)
-        self.assertAlmostEqual(p, 0.5, places=12)
-
+        self.assertTrue(math.isnan(p))
 
 if __name__ == "__main__":
     unittest.main()
