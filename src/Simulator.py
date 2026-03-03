@@ -13,6 +13,7 @@ Responsibilities
     2) for each contract row at ts, apply your queue assumption to determine fills:
         - resting bid filled when take_bid <= my_bid - tick
         - resting ask filled when take_ask >= my_ask + tick
+        - fill size is capped by taker-side market quantity when provided
     3) send fill intents to ExecutionEngine.on_fills(...)
        (engine applies trades with 1-second delay internally)
 
@@ -83,6 +84,8 @@ class Simulator:
         all_df:
             Output from DataIngestor.load()[0]. Must include:
               ts, contract_id, take_bid, take_ask, spx, vix, spy
+            Optional:
+              take_bid_qty, take_ask_qty (used to cap fill sizes)
         execution_engine:
             Instance of ExecutionEngine. Must expose:
               on_tick(ts, spx, vix, spy, contract_ids) -> dict
@@ -164,6 +167,8 @@ class Simulator:
                 take_ask_raw = row["take_ask"]
                 take_bid = float(take_bid_raw) if take_bid_raw is not None else None
                 take_ask = float(take_ask_raw) if take_ask_raw is not None else None
+                take_bid_qty = self._to_nonnegative_int(row.get("take_bid_qty"))
+                take_ask_qty = self._to_nonnegative_int(row.get("take_ask_qty"))
 
                 q = quotes_by_contract.get(cid)
 
@@ -198,13 +203,21 @@ class Simulator:
                     )
 
                     if bid_fill:
-                        fill_intents.append(FillIntent(
-                            ts=ts, contract_id=cid, side="buy", price=my_bid, size=my_bid_size
-                        ))
+                        bid_fill_size = int(my_bid_size)
+                        if take_bid_qty is not None:
+                            bid_fill_size = min(bid_fill_size, int(take_bid_qty))
+                        if bid_fill_size > 0:
+                            fill_intents.append(FillIntent(
+                                ts=ts, contract_id=cid, side="buy", price=my_bid, size=bid_fill_size
+                            ))
                     if ask_fill:
-                        fill_intents.append(FillIntent(
-                            ts=ts, contract_id=cid, side="sell", price=my_ask, size=my_ask_size
-                        ))
+                        ask_fill_size = int(my_ask_size)
+                        if take_ask_qty is not None:
+                            ask_fill_size = min(ask_fill_size, int(take_ask_qty))
+                        if ask_fill_size > 0:
+                            fill_intents.append(FillIntent(
+                                ts=ts, contract_id=cid, side="sell", price=my_ask, size=ask_fill_size
+                            ))
 
                 # 3) Record one row of behavior
                 out = {
@@ -215,6 +228,8 @@ class Simulator:
                     "spy": spy,
                     "take_bid": row.get("take_bid"),
                     "take_ask": row.get("take_ask"),
+                    "take_bid_qty": take_bid_qty,
+                    "take_ask_qty": take_ask_qty,
                     "fair_value": fair_value,
                     "my_bid": my_bid,
                     "my_ask": my_ask,
@@ -294,6 +309,16 @@ class Simulator:
             kalshi_value += q * fv
 
         return cash + float(spy_pos) * float(spy) + kalshi_value
+
+    @staticmethod
+    def _to_nonnegative_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            q = int(float(value))
+        except Exception:
+            return None
+        return max(0, q)
 
 
 if __name__ == "__main__":

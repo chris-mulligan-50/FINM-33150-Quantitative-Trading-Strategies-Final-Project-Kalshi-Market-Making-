@@ -11,6 +11,8 @@ import argparse
 import sys
 from pathlib import Path
 from typing import List
+import time
+import functools
 
 import polars as pl
 
@@ -24,6 +26,21 @@ from ExecutionEngine import ExecutionEngine
 from MarketMaker import MarketMaker
 from Simulator import Simulator
 
+def timer(func):
+    """
+    Decorator that prints the execution time of the decorated function.
+    """
+    import functools
+    import time
+
+    @functools.wraps(func)
+    def wrapper_timer(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        print(f"Function '{func.__name__}' executed in {end - start:.4f} seconds.")
+        return result
+    return wrapper_timer
 
 def _detect_macro_value_col(path: str, fallback_name: str) -> str:
     """
@@ -120,7 +137,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-
+@timer
 def main() -> None:
     parser = _build_parser()
 
@@ -222,7 +239,6 @@ def main() -> None:
     print(f"Dropped rows with unresolved macro data: {dropped_rows}")
     print(f"Simulation output rows: {result_df.height}")
     print(f"Saved output: {output_path}")
-
 
 if __name__ == "__main__":
     main()

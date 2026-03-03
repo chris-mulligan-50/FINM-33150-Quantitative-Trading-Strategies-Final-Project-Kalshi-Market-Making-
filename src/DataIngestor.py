@@ -16,7 +16,7 @@ Outputs:
 Design Philosophy
 -----------------
 • Kalshi data is stored LONG:
-    ts | contract_id | take_bid | take_ask
+    ts | contract_id | take_bid | take_ask | take_bid_qty | take_ask_qty
 
 • Macro data is stored WIDE:
     ts | spx | vix | spy
@@ -42,6 +42,8 @@ class KalshiMarketSpec:
     ts_col: str = "ts"
     take_bid_col: str = "take_bid"
     take_ask_col: str = "take_ask"
+    take_bid_qty_col: Optional[str] = None
+    take_ask_qty_col: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class KalshiCleanSpec:
     contract_id_col: str = "ticker"
     ts_col: str = "ts"
     price_col: str = "price"
+    quantity_col: str = "quantity"
     liquidity_event_col: str = "liquidity_event"
     take_bid_event_value: str = "hit_bid"
     take_ask_event_value: str = "lift_offer"
@@ -177,20 +180,35 @@ class DataIngestor:
             df = self._standardize_ts(df, m.ts_col)
 
             cols = [m.ts_col, m.take_bid_col, m.take_ask_col]
+            if m.take_bid_qty_col is not None:
+                cols.append(m.take_bid_qty_col)
+            if m.take_ask_qty_col is not None:
+                cols.append(m.take_ask_qty_col)
 
             df = df.select(cols)
 
-            df = df.with_columns([
+            with_cols = [
                 pl.lit(m.contract_id).alias("contract_id"),
                 pl.col(m.take_bid_col).cast(pl.Float64).alias("take_bid"),
                 pl.col(m.take_ask_col).cast(pl.Float64).alias("take_ask"),
-            ])
+            ]
+            if m.take_bid_qty_col is not None:
+                with_cols.append(pl.col(m.take_bid_qty_col).cast(pl.Float64).alias("take_bid_qty"))
+            else:
+                with_cols.append(pl.lit(None).cast(pl.Float64).alias("take_bid_qty"))
+            if m.take_ask_qty_col is not None:
+                with_cols.append(pl.col(m.take_ask_qty_col).cast(pl.Float64).alias("take_ask_qty"))
+            else:
+                with_cols.append(pl.lit(None).cast(pl.Float64).alias("take_ask_qty"))
+            df = df.with_columns(with_cols)
 
             df = df.select([
                 pl.col(m.ts_col).alias("ts"),
                 "contract_id",
                 "take_bid",
                 "take_ask",
+                "take_bid_qty",
+                "take_ask_qty",
             ])
 
             dfs.append(df)
@@ -211,6 +229,7 @@ class DataIngestor:
                 spec.contract_id_col,
                 spec.ts_col,
                 spec.price_col,
+                spec.quantity_col,
                 spec.liquidity_event_col,
             }
             missing = required_cols - set(df.columns)
@@ -222,6 +241,7 @@ class DataIngestor:
                     pl.col(spec.ts_col).alias("ts"),
                     pl.col(spec.contract_id_col).cast(pl.Utf8).alias("contract_id"),
                     pl.col(spec.price_col).cast(pl.Float64).alias("price"),
+                    pl.col(spec.quantity_col).cast(pl.Float64).alias("quantity"),
                     pl.col(spec.liquidity_event_col).cast(pl.Utf8).alias("liquidity_event"),
                 ])
                 .with_columns([
@@ -235,16 +255,26 @@ class DataIngestor:
                     .otherwise(None)
                     .min()
                     .alias("take_bid"),
+                    pl.when(pl.col("liquidity_event") == spec.take_bid_event_value)
+                    .then(pl.col("quantity"))
+                    .otherwise(None)
+                    .sum()
+                    .alias("take_bid_qty"),
                     pl.when(pl.col("liquidity_event") == spec.take_ask_event_value)
                     .then(pl.col("price"))
                     .otherwise(None)
                     .max()
                     .alias("take_ask"),
+                    pl.when(pl.col("liquidity_event") == spec.take_ask_event_value)
+                    .then(pl.col("quantity"))
+                    .otherwise(None)
+                    .sum()
+                    .alias("take_ask_qty"),
                 ])
                 .filter(
                     pl.col("take_bid").is_not_null() | pl.col("take_ask").is_not_null()
                 )
-                .select(["ts", "contract_id", "take_bid", "take_ask"])
+                .select(["ts", "contract_id", "take_bid", "take_ask", "take_bid_qty", "take_ask_qty"])
             )
 
             dfs.append(df)

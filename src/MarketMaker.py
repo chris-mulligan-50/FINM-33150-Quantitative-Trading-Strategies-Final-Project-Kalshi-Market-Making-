@@ -73,9 +73,9 @@ class MarketMaker:
         inventory_skew_slope: float = 0.0005,
         max_spread: float = 0.50,
         min_spread: float = 0.01,
-        default_quote_size: int = 10,
-        max_quote_size: int = 25,
-        max_abs_inventory_for_size: int = 50,
+        default_quote_size: int = 50,
+        max_quote_size: int = 100,
+        max_abs_inventory_for_size: int = 100,
         clamp_prices_to_unit_interval: bool = True,
     ) -> None:
         """

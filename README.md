@@ -14,3 +14,10 @@ python src/main.py \
   --kalshi-clean "Data/kalshi_kxinxu_clean.parquet" \
   --output "simulation_output.parquet"
 ```
+
+### TO-DO:
+- Fix fill qty possible bug. (ie. amount traded /= position we take on).
+- Implement proper short-selling margin rules.
+- Check cash / pnl / performance metrics.
+- Adverse Selection Risk Management
+    - For example, widening out as a contract approaches expry.

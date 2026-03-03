@@ -20,7 +20,7 @@ from Pricer import Pricer
 
 class SettlementTests(unittest.TestCase):
     def test_settlement_occurs_at_start_of_next_day(self) -> None:
-        pm = PositionManager(initial_cash=0.0)
+        pm = PositionManager(initial_cash=10.0)
         cid = "KXINXU-26JAN23H1600-T7000"
         pm.apply_kalshi_trade(contract_id=cid, side="buy", qty=3, price=0.40)
 
@@ -31,10 +31,10 @@ class SettlementTests(unittest.TestCase):
         settle_ts = datetime(2026, 1, 24, 0, 0, 0)
         pm.settle_expired_contracts(ts=settle_ts, settlement_spx=7100.0)
         self.assertEqual(pm.get_kalshi_position(cid), 0)
-        self.assertAlmostEqual(pm.get_cash(), -3 * 0.40 + 3 * 1.0, places=12)
+        self.assertAlmostEqual(pm.get_cash(), 10.0 - 3 * 0.40 + 3 * 1.0, places=12)
 
     def test_no_contract_settles_to_complementary_outcome(self) -> None:
-        pm = PositionManager(initial_cash=0.0)
+        pm = PositionManager(initial_cash=10.0)
         cid_no = "KXINXU:NO-26JAN23H1600-T7000"
         pm.apply_kalshi_trade(contract_id=cid_no, side="buy", qty=2, price=0.25)
 
@@ -42,7 +42,7 @@ class SettlementTests(unittest.TestCase):
         pm.settle_expired_contracts(ts=settle_ts, settlement_spx=7100.0)
         self.assertEqual(pm.get_kalshi_position(cid_no), 0)
         # NO contract settles to 0 when SPX > strike.
-        self.assertAlmostEqual(pm.get_cash(), -2 * 0.25, places=12)
+        self.assertAlmostEqual(pm.get_cash(), 10.0 - 2 * 0.25, places=12)
 
     def test_execution_engine_rehedges_after_settlement(self) -> None:
         mm = MarketMaker()
