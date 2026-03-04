@@ -145,6 +145,7 @@ class Simulator:
             )
 
             quotes_by_contract = engine_out.get("quotes_by_contract", {})
+            kalshi_delta_spx = engine_out.get("kalshi_delta_spx")
             equity = self._portfolio_equity(
                 execution_engine=execution_engine,
                 quotes_by_contract=quotes_by_contract,
@@ -246,6 +247,7 @@ class Simulator:
                     "portfolio_value": float(equity),
                     "pnl": float(pnl),
                     "returns": float(returns),
+                    "kalshi_delta_spx": float(kalshi_delta_spx) if kalshi_delta_spx is not None else None,
                 }
 
                 if log_engine_state:

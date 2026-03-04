@@ -271,13 +271,26 @@ class ExecutionEngine:
         self._quotes_by_contract = quotes
 
         # 5) hedge decision (SPY)
+        kalshi_positions = self.pm.get_kalshi_positions()
+        kalshi_delta_spx: Optional[float] = None
+        if hasattr(self.dh, "book_delta_spx"):
+            try:
+                kalshi_delta_spx = float(self.dh.book_delta_spx(
+                    ts=ts,
+                    spx_price=float(spx),
+                    vix=float(vix),
+                    kalshi_positions=kalshi_positions,
+                ))
+            except Exception:
+                kalshi_delta_spx = None
+
         spy_pos = self.pm.get_spy_position()
         hedge_order = self.dh.hedge(
             ts=ts,
             spy_price=float(spy),
             spx_price=float(spx),
             vix=float(vix),
-            kalshi_positions=self.pm.get_kalshi_positions(),
+            kalshi_positions=kalshi_positions,
             current_spy_position=int(spy_pos),
         )
         self._last_hedge_order = hedge_order
@@ -293,7 +306,11 @@ class ExecutionEngine:
                     ref_price=float(hedge_order.ref_price),
                 )
 
-        return {"quotes_by_contract": quotes, "hedge_order": hedge_order}
+        return {
+            "quotes_by_contract": quotes,
+            "hedge_order": hedge_order,
+            "kalshi_delta_spx": kalshi_delta_spx,
+        }
 
     # --------------------------------------------------------
     # Fill handling (called by Simulator when fills occur)

@@ -24,7 +24,7 @@ class DeltaHedgerTests(unittest.TestCase):
 
     def test_yes_and_no_above_deltas_are_opposites(self) -> None:
         cid_yes = "KXINXU-26MAR10H1600-T7000"
-        cid_no = "KXINXU:NO-26MAR10H1600-T7000"
+        cid_no = "KXINXU-26MAR10H1600-T7000"
         sigma = self.hedger._sigma_from_vix(self.vix)
 
         d_yes = self.hedger._contract_delta_spx(
@@ -41,7 +41,7 @@ class DeltaHedgerTests(unittest.TestCase):
     def test_hedge_order_uses_book_delta_and_spx_to_spy_mapping(self) -> None:
         positions = {
             "KXINXU-26MAR10H1600-T7000": 10,       # YES ABOVE
-            "KXINXU:NO-26MAR10H1600-T7000": 5,     # NO ABOVE
+            "KXINXU-26MAR10H1600-T7000": 5,     # NO ABOVE
         }
 
         order = self.hedger.hedge(

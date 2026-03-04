@@ -109,6 +109,28 @@ class DeltaHedger:
             ref_price=float(spy_price),
         )
 
+    def book_delta_spx(
+        self,
+        *,
+        ts: Any,
+        spx_price: float,
+        vix: Optional[float],
+        kalshi_positions: Dict[str, int],
+    ) -> float:
+        """
+        Aggregate Kalshi book delta in SPX-point units at a given tick.
+        Exposed for diagnostics/logging.
+        """
+        sigma = self._sigma_from_vix(vix)
+        return float(
+            self._book_delta_spx(
+                ts=ts,
+                spx_price=float(spx_price),
+                sigma=sigma,
+                kalshi_positions=kalshi_positions,
+            )
+        )
+
     def _book_delta_spx(
         self,
         *,
@@ -237,3 +259,14 @@ class NoHedgeDeltaHedger:
         current_spy_position: int,
     ) -> Optional[HedgeOrder]:
         return None
+
+    def book_delta_spx(
+        self,
+        *,
+        ts: Any,
+        spx_price: float,
+        vix: Optional[float],
+        kalshi_positions: Dict[str, int],
+    ) -> float:
+        _ = (ts, spx_price, vix, kalshi_positions)
+        return 0.0
