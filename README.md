@@ -12,11 +12,12 @@ python src/main.py \
   --spy "Data/spy_clean.parquet" \
   --kalshi-clean "Data/kalshi_kxinx_clean.parquet" \
   --kalshi-clean "Data/kalshi_kxinxu_clean.parquet" \
-  --output "simulation_output.parquet"
+  --output "simulation_output.parquet" \
+  --out-of-market-spread-ticks 10
 ```
 
 ### TO-DO:
-- Implement proper short-selling margin rules.
-- Check cash / pnl / performance metrics.
+- NEED SOMEONE TO CHECK THIS: Proper short-selling margin rules + Don't allow buying when cash < $1,000 (ie. 10%)
+- Explore Leverage for SPY buying
 - Adverse Selection Risk Management
     - For example, widening out as a contract approaches expry.

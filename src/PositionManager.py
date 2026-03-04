@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import math
 import re
 from typing import Any, Dict, Optional
 
@@ -42,18 +43,22 @@ class PositionManager:
         self._kalshi: Dict[str, int] = {}
         self._spy: int = 0
         self._cash: float = float(initial_cash)
+        self._initial_cash: float = float(initial_cash)
 
     def apply_kalshi_trade(self, *, contract_id: str, side: str, qty: int, price: float) -> None:
         qty_i = int(qty)
         px_f = float(price)
         inv = self._kalshi.get(contract_id, 0)
 
+        # Maker fee when our resting order is taken: round up(0.0175 * C * P * (1 - P)) to next cent
+        fee = self._maker_fee_dollars(price=px_f, contracts=qty_i)
+
         if side == "buy":
             inv += qty_i
-            self._cash -= qty_i * px_f
+            self._cash -= qty_i * px_f + fee
         elif side == "sell":
             inv -= qty_i
-            self._cash += qty_i * px_f
+            self._cash += qty_i * px_f - fee
         else:
             raise ValueError(f"Unknown side={side!r}")
 
@@ -86,6 +91,20 @@ class PositionManager:
 
     def get_cash(self) -> float:
         return float(self._cash)
+
+    def get_initial_cash(self) -> float:
+        return float(self._initial_cash)
+
+    @staticmethod
+    def _maker_fee_dollars(*, price: float, contracts: int) -> float:
+        """
+        Maker fee when our resting order is taken.
+        fee = round up(0.0175 * C * P * (1 - P)) to the next cent.
+        """
+        c = max(0, int(contracts))
+        p = float(price)
+        raw = 0.0175 * c * p * (1.0 - p)
+        return math.ceil(raw * 100.0) / 100.0
 
     def settle_expired_contracts(self, *, ts: Any, settlement_spx: float) -> Dict[str, float]:
         """
@@ -193,4 +212,14 @@ class PositionManager:
     def _to_datetime(ts: Any) -> Optional[datetime]:
         if isinstance(ts, datetime):
             return ts.replace(tzinfo=None)
+        if isinstance(ts, (int, float)):
+            sec = float(ts)
+            if sec > 1e15:
+                sec = sec / 1e9  # nanoseconds -> seconds
+            elif sec > 1e12:
+                sec = sec / 1000.0  # milliseconds -> seconds
+            try:
+                return datetime.utcfromtimestamp(sec).replace(tzinfo=None)
+            except (ValueError, OSError):
+                return None
         return None

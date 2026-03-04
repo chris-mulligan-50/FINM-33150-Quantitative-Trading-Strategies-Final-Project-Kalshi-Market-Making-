@@ -17,6 +17,11 @@ Responsibilities
     3) send fill intents to ExecutionEngine.on_fills(...)
        (engine applies trades with 1-second delay internally)
 
+- After the last tick: flush delayed trades, then settle expired Kalshi contracts
+  (PositionManager.settle_expired_contracts) using the final timestamp and SPX.
+  Contracts that have passed their settlement time pay out 0 or 1 per contract;
+  cash is updated and positions are cleared.
+
 - Log, per (ts, contract_id):
     - market snapshot (take_bid/take_ask)
     - macro snapshot (spx/vix/spy)
@@ -151,11 +156,11 @@ class Simulator:
             if base_equity is None:
                 base_equity = float(equity)
             if prev_equity is None:
-                period_return = 0.0
+                returns = 0.0
             else:
-                period_return = (float(equity) / float(prev_equity) - 1.0) if prev_equity != 0.0 else 0.0
+                # "returns" is defined as period-over-period change in PnL.
+                returns = float(equity) - float(prev_equity)
             pnl = float(equity) - float(base_equity)
-            cumulative_return = (float(equity) / float(base_equity) - 1.0) if base_equity != 0.0 else 0.0
             prev_equity = float(equity)
 
             # 2) Determine fills under last-in-queue assumption
@@ -240,8 +245,7 @@ class Simulator:
                     "ask_fill": ask_fill,
                     "portfolio_value": float(equity),
                     "pnl": float(pnl),
-                    "period_return": float(period_return),
-                    "cumulative_return": float(cumulative_return),
+                    "returns": float(returns),
                 }
 
                 if log_engine_state:
@@ -262,6 +266,14 @@ class Simulator:
 
         # 5) Flush remaining delayed trades at end of run
         execution_engine.flush()
+
+        # 6) Settle final Kalshi positions at expiry (contracts pay 0 or 1 based on outcome)
+        if ts_list:
+            last_ts_key = ts_list[-1]
+            last_ts = self._normalize_ts_key(last_ts_key)
+            last_df = per_ts[last_ts_key]
+            last_spx = float(last_df.select("spx").row(0)[0])
+            execution_engine.pm.settle_expired_contracts(ts=last_ts, settlement_spx=last_spx)
 
         return pl.DataFrame(records)
 

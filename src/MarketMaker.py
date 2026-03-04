@@ -69,13 +69,13 @@ class MarketMaker:
         tick_size: float = 0.01,
         base_spread: float = 0.02,
         vix_spread_slope: float = 0.001,
-        inventory_spread_slope: float = 0.001,
+        inventory_spread_slope: float = 0.00025,
         inventory_skew_slope: float = 0.0005,
         max_spread: float = 0.50,
         min_spread: float = 0.01,
         default_quote_size: int = 50,
         max_quote_size: int = 100,
-        max_abs_inventory_for_size: int = 100,
+        max_abs_inventory_for_size: int = 500,
         clamp_prices_to_unit_interval: bool = True,
         out_of_market_spread_ticks: int = 0,
     ) -> None:
@@ -123,6 +123,7 @@ class MarketMaker:
         self._positions: Dict[str, PositionState] = {}
         self._vix: Optional[float] = None
         self._in_regular_hours: bool = True
+        self._initial_cash: Optional[float] = None
 
     # -------------------------
     # State update methods
@@ -146,6 +147,7 @@ class MarketMaker:
         *,
         inventory: Optional[int] = None,
         cash: Optional[float] = None,
+        initial_cash: Optional[float] = None,
     ) -> None:
         """Update position state for a contract (from PositionManager)."""
         ps = self._positions.get(contract_id, PositionState())
@@ -153,6 +155,8 @@ class MarketMaker:
             ps.inventory = int(inventory)
         if cash is not None:
             ps.cash = float(cash)
+        if initial_cash is not None:
+            self._initial_cash = float(initial_cash)
         self._positions[contract_id] = ps
 
     def bulk_update_positions(self, updates: Dict[str, PositionState]) -> None:
@@ -189,19 +193,46 @@ class MarketMaker:
             spread += self.out_of_market_spread_ticks * self.tick_size
         spread = self._clamp(spread, self.min_spread, self.max_spread)
 
-        # 2) Inventory skew: shift mid away from fv so we quote more aggressively to reduce inventory
+        # 2) Size model: reduce size as inventory grows (simple default)
+        base_sz = self.default_quote_size
+        inv_penalty = abs(pos.inventory) / max(1, self.max_abs_inventory_for_size)
+        sz = int(round(base_sz * max(0.0, 1.0 - inv_penalty)))
+        sz = self._clamp_int(sz, 0, self.max_quote_size)
+
+        # Optional asymmetric sizing (tilt sizes to reduce inventory faster)
+        bid_size, ask_size = self._inventory_tilt_sizes(sz, pos.inventory)
+
+        # When cash has fallen below 5% of starting cash: remove bids; no short-selling but allow selling inventory
+        if self._initial_cash is not None and self._initial_cash > 0 and pos.cash < 0.05 * self._initial_cash:
+            bid_size = 0
+            if pos.inventory <= 0:
+                ask_size = 0  # no short-selling
+            else:
+                ask_size = min(ask_size, pos.inventory)  # only offer to sell what we have
+
+        # 3) Inventory skew: shift mid away from fv so we quote more aggressively to reduce inventory
         #    If long inventory, we skew mid DOWN -> more likely to sell (ask closer, bid further)
         #    If short inventory, skew mid UP -> more likely to buy (bid closer, ask further)
         mid_skew = -self.inventory_skew_slope * pos.inventory
         mid = fv + mid_skew
 
-        # 3) Convert mid +/- half-spread to bid/ask
+        # 4) Convert mid +/- half-spread to bid/ask
         half = 0.5 * spread
         raw_bid = mid - half
         raw_ask = mid + half
 
         bid = self._round_down(raw_bid, self.tick_size)
         ask = self._round_up(raw_ask, self.tick_size)
+
+        # 5) Include maker fees in quoted prices by widening each side.
+        #    We convert total fee for the quoted size into per-contract price impact.
+        maker_fee_bid = self.calculate_maker_fee(price=bid, contracts=bid_size)
+        maker_fee_ask = self.calculate_maker_fee(price=ask, contracts=ask_size)
+        fee_per_contract_bid = (maker_fee_bid / bid_size) if bid_size > 0 else 0.0
+        fee_per_contract_ask = (maker_fee_ask / ask_size) if ask_size > 0 else 0.0
+
+        bid = self._round_down(bid - fee_per_contract_bid, self.tick_size)
+        ask = self._round_up(ask + fee_per_contract_ask, self.tick_size)
 
         # Ensure no crossed market due to rounding
         if bid >= ask:
@@ -215,17 +246,6 @@ class MarketMaker:
                 # if clamping caused crossing, widen minimally
                 bid = self._clamp(bid - self.tick_size, 0.0, 1.0)
                 ask = self._clamp(bid + self.tick_size, 0.0, 1.0)
-
-        # 4) Size model: reduce size as inventory grows (simple default)
-        base_sz = self.default_quote_size
-        inv_penalty = abs(pos.inventory) / max(1, self.max_abs_inventory_for_size)
-        sz = int(round(base_sz * max(0.0, 1.0 - inv_penalty)))
-        sz = self._clamp_int(sz, 0, self.max_quote_size)
-
-        # Optional asymmetric sizing (tilt sizes to reduce inventory faster)
-        bid_size, ask_size = self._inventory_tilt_sizes(sz, pos.inventory)
-        maker_fee_bid = self.calculate_maker_fee(price=bid, contracts=bid_size)
-        maker_fee_ask = self.calculate_maker_fee(price=ask, contracts=ask_size)
 
         return Quote(
             contract_id=contract_id,
@@ -241,6 +261,8 @@ class MarketMaker:
                 "mid": float(mid),
                 "mid_skew": float(mid_skew),
                 "model_spread": float(spread),
+                "fee_per_contract_bid": float(fee_per_contract_bid),
+                "fee_per_contract_ask": float(fee_per_contract_ask),
                 "maker_fee_bid": float(maker_fee_bid),
                 "maker_fee_ask": float(maker_fee_ask),
             },

@@ -247,7 +247,7 @@ class ExecutionEngine:
             self.mm.update_fair_value(cid, fv)
 
             inv = self.pm.get_kalshi_position(cid)
-            self.mm.update_position(cid, inventory=inv, cash=self.pm.get_cash())
+            self.mm.update_position(cid, inventory=inv, cash=self.pm.get_cash(), initial_cash=self.pm.get_initial_cash())
 
             q = self.mm.make_quote(cid)
 
@@ -283,12 +283,15 @@ class ExecutionEngine:
         self._last_hedge_order = hedge_order
 
         if hedge_order is not None:
-            self._schedule_spy_trade(
-                decision_ts=ts,
-                side=hedge_order.side,
-                qty=int(hedge_order.qty),
-                ref_price=float(hedge_order.ref_price),
-            )
+            if hedge_order.side == "buy" and self.pm.get_cash() <= 0:
+                pass  # do not schedule SPY buy when we have no cash
+            else:
+                self._schedule_spy_trade(
+                    decision_ts=ts,
+                    side=hedge_order.side,
+                    qty=int(hedge_order.qty),
+                    ref_price=float(hedge_order.ref_price),
+                )
 
         return {"quotes_by_contract": quotes, "hedge_order": hedge_order}
 
@@ -301,8 +304,23 @@ class ExecutionEngine:
         Apply Kalshi trades immediately from fill intents.
 
         The Simulator should compute fills using your queue assumption.
+        Buys are not applied when cash <= 0 or when there is insufficient cash.
+        Short sells (selling more than you own) require margin: cash >= 50% of notional.
         """
         for f in fills:
+            if f.side == "buy":
+                cost = int(f.size) * float(f.price) + PositionManager._maker_fee_dollars(
+                    price=float(f.price), contracts=int(f.size)
+                )
+                if self.pm.get_cash() <= 0 or self.pm.get_cash() < cost:
+                    continue
+            elif f.side == "sell":
+                pos = self.pm.get_kalshi_position(f.contract_id)
+                if pos - int(f.size) < 0:
+                    # short sell: need margin = 50% of notional
+                    margin_required = 0.50 * (int(f.size) * float(f.price))
+                    if self.pm.get_cash() < margin_required:
+                        continue
             self.pm.apply_kalshi_trade(
                 contract_id=f.contract_id,
                 side=f.side,
@@ -375,6 +393,16 @@ class ExecutionEngine:
                     assert pt.contract_id is not None
                     self.pm.apply_kalshi_trade(contract_id=pt.contract_id, side=pt.side, qty=pt.qty, price=pt.price)
                 elif pt.kind == "spy":
+                    # do not execute SPY buy if we have no cash (or insufficient cash); drop the order
+                    if pt.side == "buy" and (self.pm.get_cash() <= 0 or self.pm.get_cash() < pt.qty * float(spy_price)):
+                        continue
+                    # short sell margin: if selling more than we own, need cash >= 50% of notional
+                    if pt.side == "sell":
+                        spy_pos = self.pm.get_spy_position()
+                        if spy_pos - pt.qty < 0:
+                            margin_required = 0.50 * (pt.qty * float(spy_price))
+                            if self.pm.get_cash() < margin_required:
+                                continue
                     # mark hedge execution at the *current* spy_price at execution time
                     self.pm.apply_spy_trade(side=pt.side, qty=pt.qty, price=float(spy_price))
             else:
