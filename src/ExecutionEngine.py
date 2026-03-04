@@ -186,6 +186,10 @@ class ExecutionEngine:
         self._quotes_by_contract: Dict[str, Dict[str, Any]] = {}
         self._last_hedge_order: Optional[HedgeOrder] = None
 
+        # For maintenance margin: short positions require 30% of notional reserved; prices from last tick
+        self._last_fair_values: Dict[str, float] = {}
+        self._last_spy_price: Optional[float] = None
+
     # --------------------------------------------------------
     # Main tick loop (called by Simulator)
     # --------------------------------------------------------
@@ -270,8 +274,10 @@ class ExecutionEngine:
                 "bid_size": bid_size,
                 "ask_size": ask_size,
             }
+            self._last_fair_values[cid] = float(fv)
 
         self._quotes_by_contract = quotes
+        self._last_spy_price = float(spy)
 
         # 5) hedge decision (SPY)
         kalshi_positions = self.pm.get_kalshi_positions()
@@ -299,8 +305,18 @@ class ExecutionEngine:
         self._last_hedge_order = hedge_order
 
         if hedge_order is not None:
-            if hedge_order.side == "buy" and self.pm.get_cash() <= 0:
-                pass  # do not schedule SPY buy when we have no cash
+            if hedge_order.side == "buy":
+                cost = int(hedge_order.qty) * float(hedge_order.ref_price)
+                available = self.pm.get_cash() - self._maintenance_margin_required()
+                if available <= 0 or available < cost:
+                    pass  # do not schedule SPY buy when insufficient available cash (after maintenance margin)
+                else:
+                    self._schedule_spy_trade(
+                        decision_ts=ts,
+                        side=hedge_order.side,
+                        qty=int(hedge_order.qty),
+                        ref_price=float(hedge_order.ref_price),
+                    )
             else:
                 self._schedule_spy_trade(
                     decision_ts=ts,
@@ -326,13 +342,15 @@ class ExecutionEngine:
         The Simulator should compute fills using your queue assumption.
         Buys are not applied when cash <= 0 or when there is insufficient cash.
         Short sells (selling more than you own) require margin: cash >= 50% of notional.
+        Purchases cannot use cash reserved as maintenance margin (30% of short notional).
         """
         for f in fills:
             if f.side == "buy":
                 cost = int(f.size) * float(f.price) + self.pm.get_maker_fee_dollars(
                     price=float(f.price), contracts=int(f.size)
                 )
-                if self.pm.get_cash() <= 0 or self.pm.get_cash() < cost:
+                available = self.pm.get_cash() - self._maintenance_margin_required()
+                if available <= 0 or available < cost:
                     continue
             elif f.side == "sell":
                 pos = self.pm.get_kalshi_position(f.contract_id)
@@ -400,6 +418,21 @@ class ExecutionEngine:
     # Internals: pending trades, scheduling, timestamp arithmetic
     # --------------------------------------------------------
 
+    def _maintenance_margin_required(self) -> float:
+        """
+        Cash that must be reserved for short positions (maintenance margin).
+        Shorts require 30% of position notional (at last known price) to be held; that cash cannot be used for purchases.
+        """
+        total = 0.0
+        for cid, pos in self.pm.get_kalshi_positions().items():
+            if pos < 0:
+                price = self._last_fair_values.get(cid, 0.5)
+                total += 0.30 * abs(pos) * float(price)
+        spy_pos = self.pm.get_spy_position()
+        if spy_pos < 0 and self._last_spy_price is not None:
+            total += 0.30 * abs(spy_pos) * float(self._last_spy_price)
+        return total
+
     def _apply_pending(self, *, ts: Any, spy_price: float) -> None:
         """Apply all trades whose execute_ts is due at current ts."""
         if not self._pending:
@@ -413,9 +446,11 @@ class ExecutionEngine:
                     assert pt.contract_id is not None
                     self.pm.apply_kalshi_trade(contract_id=pt.contract_id, side=pt.side, qty=pt.qty, price=pt.price)
                 elif pt.kind == "spy":
-                    # do not execute SPY buy if we have no cash (or insufficient cash); drop the order
-                    if pt.side == "buy" and (self.pm.get_cash() <= 0 or self.pm.get_cash() < pt.qty * float(spy_price)):
-                        continue
+                    # do not execute SPY buy if insufficient available cash (after maintenance margin); drop the order
+                    if pt.side == "buy":
+                        available = self.pm.get_cash() - self._maintenance_margin_required()
+                        if available <= 0 or available < pt.qty * float(spy_price):
+                            continue
                     # short sell margin: if selling more than we own, need cash >= 50% of notional
                     if pt.side == "sell":
                         spy_pos = self.pm.get_spy_position()

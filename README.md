@@ -16,6 +16,12 @@ python main.py \
   --out-of-market-spread-ticks 10
 ```
 
+Other flags:
+```bash
+--no-fees
+--no-hedge
+```
+
 ### TO-DO:
 - NEED SOMEONE TO CHECK THIS: Proper short-selling margin rules + Don't allow buying when cash < $1,000 (ie. 10%)
 - Explore Leverage for SPY buying
