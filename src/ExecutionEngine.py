@@ -145,6 +145,7 @@ class ExecutionEngine:
         execution_delay_seconds: int = 1,
         default_quote_size: Optional[int] = None,
         quote_contracts: Optional[Sequence[str]] = None,
+        apply_fees: bool = True,
     ) -> None:
         """
         Parameters
@@ -166,11 +167,13 @@ class ExecutionEngine:
             If provided, overwrites MM's default sizes (optional convenience).
         quote_contracts:
             Optional fixed set of contracts to quote. If None, you should pass contract_ids each tick.
+        apply_fees:
+            If True, apply Kalshi maker fees to fills and cash; if False, no fees.
         """
         self.mm = market_maker
         self.pricer = pricer or Pricer()
         self.dh = delta_hedger or DeltaHedger()
-        self.pm = position_manager or PositionManager()
+        self.pm = position_manager or PositionManager(apply_fees=apply_fees)
 
         self.delay = int(execution_delay_seconds)
         self._pending: List[PendingTrade] = []
@@ -326,7 +329,7 @@ class ExecutionEngine:
         """
         for f in fills:
             if f.side == "buy":
-                cost = int(f.size) * float(f.price) + PositionManager._maker_fee_dollars(
+                cost = int(f.size) * float(f.price) + self.pm.get_maker_fee_dollars(
                     price=float(f.price), contracts=int(f.size)
                 )
                 if self.pm.get_cash() <= 0 or self.pm.get_cash() < cost:

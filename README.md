@@ -6,12 +6,12 @@ SPY data: https://drive.google.com/drive/folders/1C1a70w9k-z78yTSwz2QPKVb-ZJMKi8
 ### Sim Run Instructions
 
 ```bash
-python src/main.py \
-  --spx "Data/spx_clean.parquet" \
-  --vix "Data/vix_clean.parquet" \
-  --spy "Data/spy_clean.parquet" \
-  --kalshi-clean "Data/kalshi_kxinx_clean.parquet" \
-  --kalshi-clean "Data/kalshi_kxinxu_clean.parquet" \
+python main.py \
+  --spx "Data/cleaned_parquets/spx_clean.parquet" \
+  --vix "Data/cleaned_parquets/vix_clean.parquet" \
+  --spy "Data/cleaned_parquets/spy_clean.parquet" \
+  --kalshi-clean "Data/cleaned_parquets/kalshi_kxinx_clean.parquet" \
+  --kalshi-clean "Data/cleaned_parquets/kalshi_kxinxu_clean.parquet" \
   --output "simulation_output.parquet" \
   --out-of-market-spread-ticks 10
 ```

@@ -147,6 +147,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable SPY delta hedging; run strategy with no hedges (for comparison).",
     )
+    parser.add_argument(
+        "--no-fees",
+        action="store_true",
+        help="Disable Kalshi maker fees in quotes and on fills (for comparison).",
+    )
 
     return parser
 
@@ -225,6 +230,7 @@ def main() -> None:
         tick_size=float(args.tick_size),
         base_spread=float(args.base_spread),
         out_of_market_spread_ticks=int(args.out_of_market_spread_ticks),
+        apply_fees=not args.no_fees,
     )
     delta_hedger = NoHedgeDeltaHedger() if args.no_hedge else None
     engine = ExecutionEngine(
@@ -232,6 +238,7 @@ def main() -> None:
         delta_hedger=delta_hedger,
         execution_delay_seconds=int(args.execution_delay),
         default_quote_size=args.default_quote_size,
+        apply_fees=not args.no_fees,
     )
     simulator = Simulator(tick_size=float(args.tick_size))
 

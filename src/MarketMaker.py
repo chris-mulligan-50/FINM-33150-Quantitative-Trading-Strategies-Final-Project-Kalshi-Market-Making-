@@ -78,6 +78,7 @@ class MarketMaker:
         max_abs_inventory_for_size: int = 500,
         clamp_prices_to_unit_interval: bool = True,
         out_of_market_spread_ticks: int = 0,
+        apply_fees: bool = True,
     ) -> None:
         """
         Parameters
@@ -104,6 +105,8 @@ class MarketMaker:
             Many Kalshi binary contracts trade in [0,1]. If True, clamp bid/ask to [0,1].
         out_of_market_spread_ticks:
             Extra spread (in ticks) to add outside regular market hours (9:30–16:00 ET). 0 = no widening.
+        apply_fees:
+            If True, widen bid/ask for Kalshi maker fees; if False, no fee component in quotes.
         """
         self.tick_size = float(tick_size)
         self.base_spread = float(base_spread)
@@ -117,6 +120,7 @@ class MarketMaker:
         self.max_abs_inventory_for_size = int(max_abs_inventory_for_size)
         self.clamp_prices_to_unit_interval = bool(clamp_prices_to_unit_interval)
         self.out_of_market_spread_ticks = max(0, int(out_of_market_spread_ticks))
+        self.apply_fees = bool(apply_fees)
 
         # State
         self._fair_values: Dict[str, float] = {}
@@ -224,15 +228,20 @@ class MarketMaker:
         bid = self._round_down(raw_bid, self.tick_size)
         ask = self._round_up(raw_ask, self.tick_size)
 
-        # 5) Include maker fees in quoted prices by widening each side.
+        # 5) Include maker fees in quoted prices by widening each side (when apply_fees).
         #    We convert total fee for the quoted size into per-contract price impact.
-        maker_fee_bid = self.calculate_maker_fee(price=bid, contracts=bid_size)
-        maker_fee_ask = self.calculate_maker_fee(price=ask, contracts=ask_size)
-        fee_per_contract_bid = (maker_fee_bid / bid_size) if bid_size > 0 else 0.0
-        fee_per_contract_ask = (maker_fee_ask / ask_size) if ask_size > 0 else 0.0
-
-        bid = self._round_down(bid - fee_per_contract_bid, self.tick_size)
-        ask = self._round_up(ask + fee_per_contract_ask, self.tick_size)
+        if self.apply_fees:
+            maker_fee_bid = self.calculate_maker_fee(price=bid, contracts=bid_size)
+            maker_fee_ask = self.calculate_maker_fee(price=ask, contracts=ask_size)
+            fee_per_contract_bid = (maker_fee_bid / bid_size) if bid_size > 0 else 0.0
+            fee_per_contract_ask = (maker_fee_ask / ask_size) if ask_size > 0 else 0.0
+            bid = self._round_down(bid - fee_per_contract_bid, self.tick_size)
+            ask = self._round_up(ask + fee_per_contract_ask, self.tick_size)
+        else:
+            fee_per_contract_bid = 0.0
+            fee_per_contract_ask = 0.0
+            maker_fee_bid = 0.0
+            maker_fee_ask = 0.0
 
         # Ensure no crossed market due to rounding
         if bid >= ask:

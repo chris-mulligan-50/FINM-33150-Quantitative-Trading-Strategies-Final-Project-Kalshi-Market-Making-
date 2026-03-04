@@ -39,11 +39,18 @@ class PositionManager:
         "DEC": 12,
     }
 
-    def __init__(self, *, initial_cash: float = 10_000.0) -> None:
+    def __init__(self, *, initial_cash: float = 10_000.0, apply_fees: bool = True) -> None:
         self._kalshi: Dict[str, int] = {}
         self._spy: int = 0
         self._cash: float = float(initial_cash)
         self._initial_cash: float = float(initial_cash)
+        self.apply_fees: bool = bool(apply_fees)
+
+    def get_maker_fee_dollars(self, *, price: float, contracts: int) -> float:
+        """Maker fee in dollars; 0 if apply_fees is False."""
+        if not self.apply_fees:
+            return 0.0
+        return self._maker_fee_dollars(price=price, contracts=contracts)
 
     def apply_kalshi_trade(self, *, contract_id: str, side: str, qty: int, price: float) -> None:
         qty_i = int(qty)
@@ -51,7 +58,7 @@ class PositionManager:
         inv = self._kalshi.get(contract_id, 0)
 
         # Maker fee when our resting order is taken: round up(0.0175 * C * P * (1 - P)) to next cent
-        fee = self._maker_fee_dollars(price=px_f, contracts=qty_i)
+        fee = self.get_maker_fee_dollars(price=px_f, contracts=qty_i)
 
         if side == "buy":
             inv += qty_i
