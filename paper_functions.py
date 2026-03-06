@@ -9,6 +9,10 @@ import polars as pl
 import pytz
 from IPython.display import display
 
+# ── Global constants (mirrored in notebook) ───────────────────────────────────
+INITIAL_CAPITAL = 10_000.0
+ANN_SECONDS     = 252 * 6.5 * 3600   # trading seconds per year
+
 
 def fmt_ts(ts):
     return ts.strftime("%b %d, %Y")
@@ -969,3 +973,162 @@ def correlation_with_spx_and_scatter_no_hedge(df_ts_no_hedge):
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
+
+
+# ── Section 5: Performance Analysis Functions ─────────────────────────────────
+
+def portfolio_ts(dframe):
+    """One row per second (last state per timestamp)."""
+    return dframe.sort("ts").unique(subset=["ts"], keep="last").sort("ts")
+
+
+def perf_stats(dframe, label, rf_annual=0.0425):
+    ts   = portfolio_ts(dframe)
+    pv   = ts["portfolio_value"].to_numpy()
+    t    = ts["ts"].to_pandas()
+    rets = np.diff(pv) / INITIAL_CAPITAL        # return on initial capital per second
+    rf_s = rf_annual / ANN_SECONDS
+
+    # Sharpe
+    excess  = rets - rf_s
+    sharpe  = excess.mean() / excess.std() * np.sqrt(ANN_SECONDS) if excess.std() > 0 else np.nan
+
+    # Sortino (downside deviation only)
+    neg     = excess[excess < 0]
+    sortino = excess.mean() / neg.std() * np.sqrt(ANN_SECONDS) if len(neg) > 0 and neg.std() > 0 else np.nan
+
+    # Max Drawdown
+    run_max       = np.maximum.accumulate(pv)
+    max_dd_pct    = ((run_max - pv) / run_max).max()
+    max_dd_dollar = (run_max - pv).max()
+
+    # Annualized return (trading-second basis)
+    ann_ret = (pv[-1] / pv[0]) ** (ANN_SECONDS / len(pv)) - 1
+
+    # Calmar = annualized return / max drawdown %
+    calmar  = ann_ret / max_dd_pct if max_dd_pct > 0 else np.nan
+
+    # CAGR (calendar-day basis)
+    cal_days = (t.iloc[-1] - t.iloc[0]).total_seconds() / 86_400
+    cagr     = (pv[-1] / pv[0]) ** (365 / cal_days) - 1 if cal_days > 0 else np.nan
+
+    return {
+        "Scenario"      : label,
+        "Total PnL ($)" : f"${pv[-1] - INITIAL_CAPITAL:,.2f}",
+        "Period Return" : f"{(pv[-1]/pv[0]-1)*100:.2f}%",
+        "Ann. Return"   : f"{ann_ret*100:.1f}%",
+        "Sharpe"        : f"{sharpe:.3f}",
+        "Sortino"       : f"{sortino:.3f}",
+        "Calmar"        : f"{calmar:.3f}",
+        "Max DD ($)"    : f"${max_dd_dollar:,.2f}",
+        "Max DD (%)"    : f"{max_dd_pct*100:.2f}%",
+    }
+
+
+def final_pnl(dframe):
+    ts = portfolio_ts(dframe)
+    return ts["portfolio_value"][-1] - INITIAL_CAPITAL
+
+
+def var_cvar(dframe, label, confidences=(0.95, 0.99)):
+    ts   = portfolio_ts(dframe)
+    rets = np.diff(ts["portfolio_value"].to_numpy())    # dollar P&L per second
+    row  = {"Scenario": label}
+    for c in confidences:
+        q    = np.percentile(rets, (1 - c) * 100)
+        cvar = rets[rets <= q].mean()
+        row[f"VaR  {int(c*100)}% ($)"]  = f"${q:,.3f}"
+        row[f"CVaR {int(c*100)}% ($)"] = f"${cvar:,.3f}"
+    return row
+
+
+def add_regime(dframe):
+    return dframe.with_columns(
+        pl.when(pl.col("vix") < 17).then(pl.lit("Low (<17)"))
+          .when(pl.col("vix") <= 20).then(pl.lit("Med (17-20)"))
+          .otherwise(pl.lit("High (>20)"))
+          .alias("regime")
+    )
+
+
+def get_daily_sharpe(dframe, rf_annual=0.0425):
+    """Per-trading-day Sharpe ratio."""
+    ts   = portfolio_ts(dframe)
+    pv   = ts["portfolio_value"].to_numpy()
+    t    = ts["ts"].to_pandas()
+    rets = pd.Series(np.diff(pv) / INITIAL_CAPITAL, index=t.iloc[1:].values)
+    rf_s = rf_annual / ANN_SECONDS
+    exc  = rets - rf_s
+    results = {}
+    for day, grp in exc.groupby(exc.index.date):
+        grp = grp.dropna()
+        if len(grp) < 10: continue
+        s = grp.mean() / grp.std() * np.sqrt(ANN_SECONDS) if grp.std() > 0 else np.nan
+        results[pd.Timestamp(day)] = s
+    return pd.Series(results).dropna()
+
+
+def get_hourly_rolling_sharpe(dframe, window=8, rf_annual=0.0425):
+    """Rolling Sharpe on hourly-resampled portfolio value (row-count window)."""
+    ts     = portfolio_ts(dframe)
+    pv     = ts["portfolio_value"].to_numpy()
+    t      = ts["ts"].to_pandas()
+    pv_h   = pd.Series(pv, index=t).resample("1h").last().dropna()
+    rets_h = pv_h.pct_change().dropna()
+    rf_h   = rf_annual / (252 * 6.5)     # hourly risk-free rate
+    exc_h  = rets_h - rf_h
+    ann_h  = np.sqrt(252 * 6.5)          # annualise from hourly
+    roll   = exc_h.rolling(window, min_periods=3)
+    return (roll.mean() / roll.std() * ann_h).dropna()
+
+
+def adverse_deltas(offset_secs, all_pd, fills_pd):
+    """
+    Compute post-fill favorable mid changes at a given offset.
+    Positive = market moved in our favor after the fill.
+
+    Parameters
+    ----------
+    offset_secs : int
+        Seconds after fill to measure mid price.
+    all_pd : pd.DataFrame
+        All rows with columns [ts, contract_id, mid].
+    fills_pd : pd.DataFrame
+        Fill rows with columns [ts, contract_id, mid, bid_fill, ask_fill].
+    """
+    ft = fills_pd.copy()
+    ft["future_ts"] = ft["ts"] + pd.Timedelta(seconds=offset_secs)
+    parts = []
+    for cid, grp in all_pd.groupby("contract_id"):
+        flt = ft[ft["contract_id"] == cid].sort_values("future_ts")
+        if flt.empty: continue
+        m = pd.merge_asof(
+            flt,
+            grp[["ts","mid"]].rename(columns={"mid":"future_mid"}).sort_values("ts"),
+            left_on="future_ts", right_on="ts", direction="nearest",
+            tolerance=pd.Timedelta(seconds=offset_secs * 3)
+        )
+        parts.append(m)
+    if not parts: return np.array([])
+    merged = pd.concat(parts).dropna(subset=["future_mid"])
+    merged["delta"] = merged["future_mid"] - merged["mid"]
+    merged["favorable"] = np.where(merged["ask_fill"], -merged["delta"], merged["delta"])
+    return merged["favorable"].to_numpy()
+
+
+def parse_expiry(ticker):
+    """Parse expiry datetime from a KXINXU ticker string."""
+    months = {"JAN":1,"FEB":2,"MAR":3,"APR":4,"MAY":5,"JUN":6,"JUL":7,
+              "AUG":8,"SEP":9,"OCT":10,"NOV":11,"DEC":12}
+    m = re.search(r"-(\d{2})([A-Z]{3})(\d{2})H(\d{2})(\d{2})", ticker)
+    if not m: return None
+    yy, mon, dd, hh, mm = m.groups()
+    mo = months.get(mon)
+    return datetime(2000+int(yy), mo, int(dd), int(hh), int(mm)) if mo else None
+
+
+def model_price(row, pricer):
+    """Compute Black-Scholes model price for a single KXINXU row."""
+    if pd.isna(row["spx"]) or pd.isna(row["vix"]) or pd.isna(row["tau"]) or row["tau"] <= 0:
+        return np.nan
+    return pricer.price(contract_id=row["ticker"], spx=row["spx"], vix=row["vix"], ts=row["ts"])
