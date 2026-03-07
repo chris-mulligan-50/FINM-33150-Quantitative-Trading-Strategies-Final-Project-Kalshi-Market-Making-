@@ -1172,3 +1172,357 @@ def model_price(row, pricer):
     if pd.isna(row["spx"]) or pd.isna(row["vix"]) or pd.isna(row["tau"]) or row["tau"] <= 0:
         return np.nan
     return pricer.price(contract_id=row["ticker"], spx=row["spx"], vix=row["vix"], ts=row["ts"])
+
+
+def display_performance_summary_table(df, df_no_fees, df_no_hedge):
+    rows = [
+        perf_stats(df, "Base (fees + hedge)"),
+        perf_stats(df_no_fees, "No Fees (hedge on)"),
+        perf_stats(df_no_hedge, "No Hedge (fees on)"),
+    ]
+    summary = pd.DataFrame(rows).set_index("Scenario")
+    display(summary.T)
+    return summary
+
+
+def plot_pnl_waterfall_and_attribution(df, df_no_fees, df_no_hedge):
+    pnl_base = final_pnl(df)
+    pnl_no_fees = final_pnl(df_no_fees)
+    pnl_no_hedge = final_pnl(df_no_hedge)
+
+    fee_drag = pnl_no_fees - pnl_base
+    hedge_drag = pnl_no_hedge - pnl_base
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    stages = ["Gross\n(no fees)", "−Fee Drag", "Net PnL\n(base)"]
+    starts = [0, pnl_no_fees, 0]
+    heights = [pnl_no_fees, -fee_drag, pnl_base]
+    colors = ["#2196F3", "#F44336", "#4CAF50"]
+
+    for i, (lbl, s, h, c) in enumerate(zip(stages, starts, heights, colors)):
+        ax1.bar(lbl, h, bottom=s, color=c, edgecolor="white", linewidth=1.2, width=0.5)
+        sign = "+" if h >= 0 else ""
+        ax1.text(i, s + h + 15, f"{sign}${h:,.0f}", ha="center", va="bottom", fontsize=11, fontweight="bold")
+
+    ax1.axhline(0, color="black", linewidth=0.8, linestyle="--")
+    ax1.set_ylabel("PnL ($)")
+    ax1.set_title("Waterfall: Gross → Fees → Net", fontweight="bold")
+    ax1.set_ylim(-100, pnl_no_fees * 1.2)
+
+    labels = ["No Fees\n(hedge on)", "No Hedge\n(fees on)", "Base\n(fees+hedge)"]
+    vals = [pnl_no_fees, pnl_no_hedge, pnl_base]
+    clrs = ["#2196F3", "#FF9800", "#4CAF50"]
+
+    bars = ax2.bar(labels, vals, color=clrs, edgecolor="white", linewidth=1.2, width=0.5)
+    for bar, v in zip(bars, vals):
+        ax2.text(bar.get_x() + bar.get_width() / 2, v + 15, f"${v:,.0f}", ha="center", va="bottom", fontsize=11, fontweight="bold")
+    ax2.axhline(0, color="black", linewidth=0.8, linestyle="--")
+    ax2.set_ylabel("Total PnL ($)")
+    ax2.set_title("Scenario Comparison", fontweight="bold")
+    ax2.set_ylim(-100, max(vals) * 1.2)
+
+    hedge_label = f"Hedge drag: −${hedge_drag:,.0f}" if hedge_drag > 0 else f"Hedge benefit: +${-hedge_drag:,.0f}"
+    fig.text(0.5, -0.03, f"Fee cost: −${fee_drag:,.0f}    |    {hedge_label}", ha="center", fontsize=10, color="gray")
+    fig.suptitle("PnL Waterfall & Scenario Attribution", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+
+    return pnl_base, pnl_no_fees, pnl_no_hedge, fee_drag, hedge_drag
+
+
+def display_var_cvar_and_pnl_distribution(df, df_no_fees, df_no_hedge):
+    tbl = pd.DataFrame([
+        var_cvar(df, "Base (fees + hedge)"),
+        var_cvar(df_no_fees, "No Fees (hedge on)"),
+        var_cvar(df_no_hedge, "No Hedge (fees on)"),
+    ]).set_index("Scenario")
+    display(tbl)
+
+    ts_b = portfolio_ts(df)
+    rets_dol = np.diff(ts_b["portfolio_value"].to_numpy())
+    var95 = np.percentile(rets_dol, 5)
+    var99 = np.percentile(rets_dol, 1)
+    x_lo, x_hi = np.percentile(rets_dol, [0.5, 99.5])
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.hist(rets_dol, bins=100, color="#2196F3", alpha=0.7, edgecolor="none", range=(x_lo, x_hi))
+    ax.axvline(var95, color="orange", linestyle="--", linewidth=1.5, label=f"VaR 95%: ${var95:,.3f}")
+    ax.axvline(var99, color="red", linestyle="--", linewidth=1.5, label=f"VaR 99%: ${var99:,.3f}")
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_xlabel("Per-Second Dollar P&L ($)")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Distribution of Per-Second P&L — Base Scenario", fontweight="bold")
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+
+    n_clipped = ((rets_dol < x_lo) | (rets_dol > x_hi)).sum()
+    print(f"{n_clipped} outlier seconds outside view  |  full range: ${rets_dol.min():,.2f} to ${rets_dol.max():,.2f}")
+    return tbl, ts_b, rets_dol, var95, var99, x_lo, x_hi, n_clipped
+
+
+def plot_sharpe_ratio_analysis(df, df_no_fees, df_no_hedge):
+    sh_d_base = get_daily_sharpe(df)
+    sh_d_nf = get_daily_sharpe(df_no_fees)
+    sh_d_nh = get_daily_sharpe(df_no_hedge)
+    sh_r_base = get_hourly_rolling_sharpe(df)
+    sh_r_nf = get_hourly_rolling_sharpe(df_no_fees)
+    sh_r_nh = get_hourly_rolling_sharpe(df_no_hedge)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8))
+
+    clrs = ["#4CAF50" if v > 0 else "#F44336" for v in sh_d_base.values]
+    x = np.arange(len(sh_d_base))
+    ax1.bar(x, sh_d_base.values, color=clrs, alpha=0.85, width=0.75)
+    step = max(1, len(sh_d_base) // 10)
+    tick_locs = x[::step]
+    tick_lbls = [d.strftime("%b %d") for d in sh_d_base.index[::step]]
+    ax1.set_xticks(tick_locs)
+    ax1.set_xticklabels(tick_lbls, rotation=30, ha="right", fontsize=8)
+    ax1.axhline(0, color="black", lw=0.8, linestyle="--")
+    pos_days = (sh_d_base > 0).sum()
+    ax1.set_ylabel("Daily Sharpe")
+    ax1.set_title(f"Daily Sharpe Ratio — Base Scenario  ({pos_days}/{len(sh_d_base)} positive days)", fontweight="bold")
+
+    ax2.plot(sh_r_base.index, sh_r_base.values, color="#2196F3", lw=0.9, label="Base (fees+hedge)", alpha=0.9)
+    ax2.plot(sh_r_nf.index, sh_r_nf.values, color="#4CAF50", lw=0.9, label="No Fees", alpha=0.8)
+    ax2.plot(sh_r_nh.index, sh_r_nh.values, color="#FF9800", lw=0.9, label="No Hedge", alpha=0.8)
+    ax2.axhline(0, color="black", lw=0.8, linestyle="--")
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+    ax2.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=0))
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=30, ha="right")
+    ax2.set_ylabel("Rolling Sharpe (8-hour window)")
+    ax2.set_title("Rolling 8-Trading-Hour Sharpe — All Scenarios", fontweight="bold")
+    ax2.legend()
+
+    fig.suptitle("Sharpe Ratio Analysis", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+
+    return sh_d_base, sh_d_nf, sh_d_nh, sh_r_base, sh_r_nf, sh_r_nh
+
+
+def display_vix_regime_analysis(df, df_ts):
+    ts_reg = add_regime(df_ts).with_columns(pl.col("pnl").diff().alias("pnl_chg"))
+    regime_pnl = (
+        ts_reg.group_by("regime")
+        .agg([pl.col("pnl_chg").sum().alias("pnl"), pl.col("vix").mean().alias("avg_vix")])
+        .sort("avg_vix")
+    )
+
+    df_reg = add_regime(df).with_columns([
+        (pl.col("bid_fill") | pl.col("ask_fill")).alias("any_fill"),
+        (pl.col("my_bid").is_not_null() & (pl.col("my_bid") > 0)).alias("quoting"),
+    ])
+    fill_reg = (
+        df_reg.group_by("regime")
+        .agg([
+            pl.col("any_fill").sum().alias("fills"),
+            pl.col("quoting").sum().alias("quoted"),
+            (pl.col("my_ask") - pl.col("my_bid")).filter(pl.col("my_bid") > 0).mean().alias("avg_spread"),
+            pl.col("vix").mean().alias("avg_vix"),
+        ])
+        .with_columns((pl.col("fills") / pl.col("quoted") * 100).alias("fill_rate_pct"))
+        .sort("avg_vix")
+    )
+
+    reg_sum = (
+        fill_reg.join(regime_pnl.select(["regime", "pnl"]), on="regime")
+        .select(["regime", "fills", "fill_rate_pct", "avg_spread", "pnl", "avg_vix"])
+    ).to_pandas().set_index("regime")
+    reg_sum.columns = ["Fills", "Fill Rate (%)", "Avg Spread", "PnL ($)", "Avg VIX"]
+    display(reg_sum.round(3))
+
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4))
+    pal = ["#4CAF50", "#FF9800", "#F44336"]
+    regs = reg_sum.index.tolist()
+
+    axes[0].bar(regs, reg_sum["Fill Rate (%)"], color=pal)
+    axes[0].set_title("Fill Rate (%) by VIX Regime", fontweight="bold")
+    axes[0].set_ylabel("Fill Rate (%)")
+
+    axes[1].bar(regs, reg_sum["Avg Spread"], color=pal)
+    axes[1].set_title("Avg Quoted Spread by VIX Regime", fontweight="bold")
+    axes[1].set_ylabel("Spread (prob. pts)")
+
+    axes[2].bar(regs, reg_sum["PnL ($)"], color=pal)
+    axes[2].set_title("Cumulative PnL ($) by VIX Regime", fontweight="bold")
+    axes[2].set_ylabel("PnL ($)")
+
+    for ax in axes:
+        ax.tick_params(axis="x", labelsize=8)
+    plt.suptitle("VIX Regime Analysis", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+
+    return ts_reg, regime_pnl, df_reg, fill_reg, reg_sum
+
+
+def plot_fill_rate_and_adverse_selection(df):
+    df_fill = df.with_columns([
+        pl.col("ts").dt.date().alias("date"),
+        (pl.col("bid_fill") | pl.col("ask_fill")).alias("any_fill"),
+        (pl.col("my_bid").is_not_null() & (pl.col("my_bid") > 0)).alias("quoting"),
+    ])
+    daily_fill = (
+        df_fill.group_by("date")
+        .agg([pl.col("any_fill").sum().alias("fills"), pl.col("quoting").sum().alias("quoted")])
+        .with_columns((pl.col("fills") / pl.col("quoted") * 100).alias("fill_rate_pct"))
+        .sort("date")
+    ).to_pandas()
+
+    fig1, ax1 = plt.subplots(figsize=(13, 3))
+    ax1.bar(daily_fill["date"].astype(str), daily_fill["fill_rate_pct"], color="#4CAF50", alpha=0.85)
+    ax1.set_ylabel("Fill Rate (%)")
+    ax1.set_xlabel("Date")
+    ax1.set_title("Daily Fill Rate — % of Quoted Rows Resulting in a Fill", fontweight="bold")
+    plt.xticks(rotation=45, ha="right", fontsize=7)
+    plt.tight_layout()
+    plt.show()
+
+    print(f"Overall fill rate: {daily_fill['fill_rate_pct'].mean():.2f}%  |  " f"Total fills: {daily_fill['fills'].sum():,}")
+
+    df_mid = df.with_columns(
+        pl.when(pl.col("take_bid").is_not_null() & pl.col("take_ask").is_not_null())
+        .then((pl.col("take_bid") + pl.col("take_ask")) / 2)
+        .otherwise((pl.col("my_bid") + pl.col("my_ask")) / 2)
+        .alias("mid")
+    )
+    all_pd = df_mid.select(["ts", "contract_id", "mid"]).to_pandas()
+    fills_pd = df_mid.filter(pl.col("bid_fill") | pl.col("ask_fill")).select(
+        ["ts", "contract_id", "mid", "bid_fill", "ask_fill"]
+    ).to_pandas()
+
+    print("Computing post-fill adverse selection...")
+    d1 = adverse_deltas(1, all_pd, fills_pd)
+    d5 = adverse_deltas(5, all_pd, fills_pd)
+    d30 = adverse_deltas(30, all_pd, fills_pd)
+    print("Done.")
+
+    labels = ["+1 second", "+5 seconds", "+30 seconds"]
+    datasets = [d1, d5, d30]
+
+    fig2, (ax_bar, ax_hist) = plt.subplots(1, 2, figsize=(13, 5))
+
+    for_pct = [(d > 0).mean() * 100 for d in datasets]
+    zero_pct = [(d == 0).mean() * 100 for d in datasets]
+    adv_pct = [(d < 0).mean() * 100 for d in datasets]
+
+    x = np.arange(len(labels))
+    width = 0.5
+    ax_bar.bar(x, for_pct, width, label="Favorable (moved our way)", color="#4CAF50", alpha=0.85)
+    ax_bar.bar(x, zero_pct, width, bottom=for_pct, label="No change", color="#9E9E9E", alpha=0.7)
+    ax_bar.bar(
+        x,
+        adv_pct,
+        width,
+        bottom=[f + z for f, z in zip(for_pct, zero_pct)],
+        label="Adverse (moved against us)",
+        color="#F44336",
+        alpha=0.85,
+    )
+
+    for bar, f, z, a in zip(x, for_pct, zero_pct, adv_pct):
+        if f > 1:
+            ax_bar.text(bar, f / 2, f"{f:.1f}%", ha="center", va="center", fontsize=8, color="white", fontweight="bold")
+        if z > 2:
+            ax_bar.text(bar, f + z / 2, f"{z:.1f}%", ha="center", va="center", fontsize=8, color="white", fontweight="bold")
+        if a > 1:
+            ax_bar.text(
+                bar,
+                f + z + a / 2,
+                f"{a:.1f}%",
+                ha="center",
+                va="center",
+                fontsize=8,
+                color="white",
+                fontweight="bold",
+            )
+
+    ax_bar.set_xticks(x)
+    ax_bar.set_xticklabels(labels)
+    ax_bar.set_ylabel("% of fills")
+    ax_bar.set_title("Post-Fill Mid Movement Split\n(favorable / no-change / adverse)", fontweight="bold")
+    ax_bar.legend(loc="upper right", fontsize=8)
+
+    colors = ["#2196F3", "#4CAF50", "#FF9800"]
+    any_nz = False
+    for deltas, lbl, clr in zip(datasets, labels, colors):
+        nz = deltas[deltas != 0]
+        if len(nz) < 5:
+            continue
+        any_nz = True
+        lo, hi = np.percentile(nz, [5, 95])
+        ax_hist.hist(
+            nz,
+            bins=30,
+            range=(lo, hi),
+            alpha=0.55,
+            color=clr,
+            label=f"{lbl}  (n={len(nz)}, mean={nz.mean():.4f})",
+            density=True,
+        )
+        ax_hist.axvline(nz.mean(), color=clr, lw=1.5, linestyle="--")
+
+    ax_hist.axvline(0, color="black", lw=1.0, linestyle="--", label="zero")
+    ax_hist.set_xlabel("Favorable mid change (prob. pts)")
+    ax_hist.set_ylabel("Density")
+    ax_hist.set_title("Non-Zero Post-Fill Mid Moves Only\n(clipped 5th–95th pct)", fontweight="bold")
+    if any_nz:
+        ax_hist.legend(fontsize=8)
+
+    fig2.suptitle("Post-Fill Adverse Selection Analysis", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+
+    return df_fill, daily_fill, df_mid, all_pd, fills_pd, d1, d5, d30, labels, datasets
+
+
+def display_contract_type_breakdown(df):
+    df_typed = df.with_columns([
+        pl.when(pl.col("contract_id").str.starts_with("KXINXU"))
+        .then(pl.lit("KXINXU (threshold)"))
+        .otherwise(pl.lit("KXINX (range)"))
+        .alias("ctype"),
+        (pl.col("bid_fill") | pl.col("ask_fill")).alias("any_fill"),
+        (pl.col("my_bid").is_not_null() & (pl.col("my_bid") > 0)).alias("quoting"),
+    ])
+
+    type_stats = (
+        df_typed.group_by("ctype")
+        .agg([
+            pl.col("contract_id").n_unique().alias("n_contracts"),
+            pl.col("any_fill").sum().alias("total_fills"),
+            pl.col("quoting").sum().alias("quoted_rows"),
+            (pl.col("my_ask") - pl.col("my_bid")).filter(pl.col("my_bid") > 0).mean().alias("avg_spread"),
+            pl.col("my_bid_size").filter(pl.col("quoting")).mean().alias("avg_size"),
+        ])
+        .with_columns((pl.col("total_fills") / pl.col("quoted_rows") * 100).alias("fill_rate_pct"))
+        .sort("ctype")
+    ).to_pandas().set_index("ctype")
+
+    type_stats.columns = ["Contracts", "Fills", "Quoted Rows", "Avg Spread", "Avg Size", "Fill Rate (%)"]
+    display(type_stats[["Contracts", "Fills", "Fill Rate (%)", "Avg Spread", "Avg Size"]].round(3))
+
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    pal = ["#2196F3", "#FF9800"]
+    ctypes = type_stats.index.tolist()
+
+    axes[0].bar(ctypes, type_stats["Fills"], color=pal)
+    axes[0].set_title("Total Fills", fontweight="bold")
+    axes[0].set_ylabel("Count")
+    axes[1].bar(ctypes, type_stats["Fill Rate (%)"], color=pal)
+    axes[1].set_title("Fill Rate (%)", fontweight="bold")
+    axes[1].set_ylabel("Fill Rate (%)")
+    axes[2].bar(ctypes, type_stats["Avg Spread"], color=pal)
+    axes[2].set_title("Avg Quoted Spread", fontweight="bold")
+    axes[2].set_ylabel("Spread (prob. pts)")
+
+    for ax in axes:
+        ax.tick_params(axis="x", labelsize=8)
+    plt.suptitle("KXINX vs KXINXU — Contract Type Breakdown", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+
+    return df_typed, type_stats
