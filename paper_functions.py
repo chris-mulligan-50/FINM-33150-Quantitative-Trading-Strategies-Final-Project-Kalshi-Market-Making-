@@ -1082,37 +1082,77 @@ def get_hourly_rolling_sharpe(dframe, window=8, rf_annual=0.0425):
     return (roll.mean() / roll.std() * ann_h).dropna()
 
 
-def adverse_deltas(offset_secs, all_pd, fills_pd):
-    """
-    Compute post-fill favorable mid changes at a given offset.
-    Positive = market moved in our favor after the fill.
+def _to_pd_datetime(s):
+    # Already datetime-like: leave it alone
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s
 
-    Parameters
-    ----------
-    offset_secs : int
-        Seconds after fill to measure mid price.
-    all_pd : pd.DataFrame
-        All rows with columns [ts, contract_id, mid].
-    fills_pd : pd.DataFrame
-        Fill rows with columns [ts, contract_id, mid, bid_fill, ask_fill].
+    # Numeric epoch: assume ns coming from Polars/Python timestamp pipeline
+    if pd.api.types.is_numeric_dtype(s):
+        return pd.to_datetime(s, unit="ns")
+
+    # Strings / python datetimes / object dtype
+    return pd.to_datetime(s)
+
+def adverse_deltas(offset_secs, all_df, fills_df):
     """
-    ft = fills_pd.copy()
-    ft["future_ts"] = ft["ts"] + pd.Timedelta(seconds=offset_secs)
-    parts = []
-    for cid, grp in all_pd.groupby("contract_id"):
-        flt = ft[ft["contract_id"] == cid].sort_values("future_ts")
-        if flt.empty: continue
-        m = pd.merge_asof(
-            flt,
-            grp[["ts","mid"]].rename(columns={"mid":"future_mid"}).sort_values("ts"),
-            left_on="future_ts", right_on="ts", direction="nearest",
-            tolerance=pd.Timedelta(seconds=offset_secs * 3)
-        )
-        parts.append(m)
-    if not parts: return np.array([])
-    merged = pd.concat(parts).dropna(subset=["future_mid"])
+    Accepts either pandas or polars DataFrames.
+    Returns numpy array of favorable deltas.
+    """
+
+    # Convert to pandas if needed
+    all_pd = all_df.to_pandas().copy() if isinstance(all_df, pl.DataFrame) else all_df.copy()
+    fills_pd = fills_df.to_pandas().copy() if isinstance(fills_df, pl.DataFrame) else fills_df.copy()
+
+    # Robust timestamp conversion
+    all_pd["ts"] = _to_pd_datetime(all_pd["ts"])
+    fills_pd["ts"] = _to_pd_datetime(fills_pd["ts"])
+
+    # Build future lookup time
+    fills_pd["future_ts"] = fills_pd["ts"] + pd.Timedelta(seconds=offset_secs)
+
+    # Sort for merge_asof
+    all_pd = all_pd.sort_values(["contract_id", "ts"]).reset_index(drop=True)
+    fills_pd = fills_pd.sort_values(["contract_id", "future_ts"]).reset_index(drop=True)
+
+    rhs = (
+        all_pd[["contract_id", "ts", "mid"]]
+        .rename(columns={"ts": "lookup_ts", "mid": "future_mid"})
+        .sort_values(["contract_id", "lookup_ts"])
+        .reset_index(drop=True)
+    )
+
+    # sort keys
+    fills_pd["contract_id"] = fills_pd["contract_id"].astype(str)
+    rhs["contract_id"] = rhs["contract_id"].astype(str)
+
+    fills_pd["future_ts"] = _to_pd_datetime(fills_pd["future_ts"]).dt.as_unit("ns")
+    rhs["lookup_ts"] = _to_pd_datetime(rhs["lookup_ts"]).dt.as_unit("ns")
+
+    fills_pd = fills_pd.sort_values(["future_ts", "contract_id"]).reset_index(drop=True)
+    rhs = rhs.sort_values(["lookup_ts", "contract_id"]).reset_index(drop=True)
+
+    merged = pd.merge_asof(
+        fills_pd,
+        rhs,
+        left_on="future_ts",
+        right_on="lookup_ts",
+        by="contract_id",
+        direction="forward",
+        tolerance=pd.Timedelta(seconds=offset_secs * 3),
+    )
+
+    merged = merged.dropna(subset=["future_mid"]).copy()
     merged["delta"] = merged["future_mid"] - merged["mid"]
-    merged["favorable"] = np.where(merged["ask_fill"], -merged["delta"], merged["delta"])
+
+    # ask_fill => sold => favorable if price falls
+    # bid_fill => bought => favorable if price rises
+    merged["favorable"] = np.where(
+        merged["ask_fill"],
+        -merged["delta"],
+        merged["delta"],
+    )
+
     return merged["favorable"].to_numpy()
 
 
