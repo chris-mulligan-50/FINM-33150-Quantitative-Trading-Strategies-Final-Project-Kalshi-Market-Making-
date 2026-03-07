@@ -5,6 +5,8 @@ SPY data: https://drive.google.com/drive/folders/1C1a70w9k-z78yTSwz2QPKVb-ZJMKi8
 
 ### Sim Run Instructions
 
+Make sure you have the `requirements.txt` satisfied (`pip`)
+
 ```bash
 python main.py \
   --spx "Data/cleaned_parquets/spx_clean.parquet" \
@@ -21,9 +23,3 @@ Other flags:
 --no-fees
 --no-hedge
 ```
-
-### TO-DO:
-- NEED SOMEONE TO CHECK THIS: Proper short-selling margin rules + Don't allow buying when cash < $1,000 (ie. 10%)
-- Explore Leverage for SPY buying
-- Adverse Selection Risk Management
-    - For example, widening out as a contract approaches expry.
