@@ -67,12 +67,12 @@
                 \item Spread design \& fees
               \end{itemize}
         \item The Data
-        \item Market Making Logic
       \end{enumerate}
     \end{column}
     \begin{column}{0.48\textwidth}
       \begin{enumerate}
         \setcounter{enumi}{6}
+        \item Market Making Logic
         \item Simulation Logic \& Assumptions
         \item Delta Hedging Logic
         \item Leverage \& Shorting
@@ -566,6 +566,7 @@
       \[
         \Delta_{\text{YES ABOVE}}(K) = \frac{\varphi(d_2)}{S_t\,\sigma\,\sqrt{T-t}}
       \]
+      \vspace{-0.4cm}
       \begin{itemize}\small
         \item $\varphi(\cdot)$ = standard normal PDF
         \item Units: contract value change per \$1 SPX move
@@ -582,6 +583,7 @@
       \[
         \text{SPY target} = -10 \times \Delta_{\text{book}} \text{ shares}
       \]
+      \vspace{-0.6cm}
       \begin{itemize}\small
         \item Negative book delta $\Rightarrow$ buy SPY
         \item Positive book delta $\Rightarrow$ sell SPY short
@@ -624,8 +626,7 @@
   \end{columns}
   \vspace{0.2em}
   \begin{alertblock}{Leverage Policy}
-    \small No leverage on Kalshi positions. Profitability comes from spread capture,
-    not capital magnification. Margin rules are conservative proxies for live trading.
+    \small Leverage is used for the delta-hedging leg (SPY short margin), while intentionally not applying leverage to the Kalshi book itself. Market-making profit does not scale with capital.
   \end{alertblock}
 \end{frame}
 
