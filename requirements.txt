@@ -1,4 +1,4 @@
-##blpapi install manually
+#blpapi install manually
 cryptography
 matplotlib
 pandas
@@ -6,4 +6,4 @@ polars
 pyarrow
 requests
 numpy
-##yfinance installation manually
+#yfinance installation manually
