@@ -4,10 +4,7 @@ __pycache__/
 *.pyc
 
 # Data files (licensed sources — Bloomberg, Databento)
-*.parquet
+Data/cleaned_parquets/
 
 # macOS metadata
 .DS_Store
-
-# Generated output
-simulation_*.parquet
