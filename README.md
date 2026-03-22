@@ -134,3 +134,10 @@ main.py                # CLI entry point
 submission.ipynb       # full analysis notebook
 QTS_Pitchbook_Final.pdf  # final presentation
 ```
+
+---
+
+## References
+
+- C. Bürgi, W. Deng, and K. Whelan, "Makers and Takers: The Economics of the Kalshi Prediction Market," 2025. [doi:10.2139/ssrn.5502658](https://doi.org/10.2139/ssrn.5502658)
+- J. E. Ingersoll Jr., "Digital Contracts: Simple Tools for Pricing Complex Derivatives," *The Journal of Business*, vol. 73, no. 1, pp. 67–88, 2000. [doi:10.1086/209632](https://doi.org/10.1086/209632)
