@@ -1,6 +1,6 @@
 # Kalshi SPX Binary Contract Market Maker
 
-A fully automated market-making system for Kalshi's short-dated SPX binary (event) contracts. Built as the final project for FINM 33150 — Quantitative Trading Strategies at the University of Chicago.
+A fully automated market-making system for Kalshi's short-dated SPX binary (event) contracts. Built as the final project for FINM 33150 — Quantitative Trading Strategies at the University of Chicago completed from January to March 2026.
 
 **Authors:** George Lord, Chris Mulligan, Max Zhalilo
 
